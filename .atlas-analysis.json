@@ -1,0 +1,86 @@
+{
+  "projectType": "saas",
+  "projectName": "KaggleIngest",
+  "projectDescription": "Transform Kaggle competitions and notebooks into token-optimized context for AI assistants",
+  "theme": "palm",
+  "primaryColor": "#20BEFF",
+  "lightColor": "#E0F7FF",
+  "darkColor": "#0A4A6E",
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Get Started",
+            "pages": [
+              "introduction",
+              "quickstart",
+              "installation"
+            ]
+          },
+          {
+            "group": "Core Concepts",
+            "pages": [
+              "concepts/toon-format",
+              "concepts/caching-architecture",
+              "concepts/ranking-algorithm"
+            ]
+          },
+          {
+            "group": "Guides",
+            "pages": [
+              "guides/authentication",
+              "guides/searching-competitions",
+              "guides/getting-context",
+              "guides/error-handling"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "API Reference",
+        "groups": [
+          {
+            "group": "Authentication",
+            "pages": [
+              "api-reference/auth/signup",
+              "api-reference/auth/get-user"
+            ]
+          },
+          {
+            "group": "Competitions",
+            "pages": [
+              "api-reference/competitions/get-competition",
+              "api-reference/competitions/search"
+            ]
+          },
+          {
+            "group": "Reference",
+            "pages": [
+              "api-reference/rate-limits",
+              "api-reference/status-codes"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "Token-Oriented Object Notation (TOON) for LLM-optimized context",
+    "Smart notebook ranking with upvote and time decay scoring",
+    "PostgreSQL-backed high-performance caching layer",
+    "API-first security with tiered credit management",
+    "Hybrid full-text and fuzzy search for competitions",
+    "Background job processing for competition ingestion"
+  ],
+  "publicApiSurface": [
+    "POST /api/auth/signup",
+    "GET /api/auth/me",
+    "GET /api/search",
+    "GET /api/competitions/{slug}",
+    "POST /api/get-context",
+    "POST /api/get-context-upload",
+    "GET /health"
+  ]
+}
