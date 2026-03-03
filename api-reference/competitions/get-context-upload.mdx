@@ -1,0 +1,262 @@
+---
+title: POST /api/get-context-upload
+description: Fetch competition context with your own Kaggle credentials
+---
+
+## Overview
+
+The `/api/get-context-upload` endpoint allows you to fetch competition context using your own Kaggle API credentials. This is required for:
+- Private competitions
+- Competitions with restricted data access
+- Rate limit avoidance (uses your personal Kaggle quota)
+
+**Endpoint:** `POST /api/get-context-upload`
+
+**Content-Type:** `multipart/form-data`
+
+**Authentication:** Not required (credentials provided in request)
+
+<Warning>
+Your `kaggle.json` file contains sensitive API credentials. Never commit it to version control or share it publicly.
+</Warning>
+
+## Request
+
+This endpoint uses `multipart/form-data` to accept file uploads.
+
+<ParamField body="url" type="string" required>
+  Full Kaggle competition URL
+</ParamField>
+
+<ParamField body="top_n" type="integer" default={3}>
+  Number of top notebooks to include (1-10)
+</ParamField>
+
+<ParamField body="token_file" type="file" required>
+  Your `kaggle.json` credentials file containing `username` and `key`
+</ParamField>
+
+## Getting your kaggle.json
+
+<Steps>
+  <Step title="Log in to Kaggle">
+    Go to [kaggle.com](https://www.kaggle.com) and sign in
+  </Step>
+  
+  <Step title="Access your account settings">
+    Click your profile picture → **Settings**
+  </Step>
+  
+  <Step title="Create new API token">
+    Scroll to **API** section → Click **Create New Token**
+  </Step>
+  
+  <Step title="Download kaggle.json">
+    Your browser will download `kaggle.json` automatically
+  </Step>
+</Steps>
+
+The file format:
+```json
+{
+  "username": "your-kaggle-username",
+  "key": "your-api-key-here"
+}
+```
+
+## Response
+
+Returns a `CompetitionResponse` with `processing` status, as the ingestion happens in the background.
+
+<ResponseField name="slug" type="string">
+  Competition slug extracted from the URL
+</ResponseField>
+
+<ResponseField name="title" type="string">
+  Always "Processing..." during initial request
+</ResponseField>
+
+<ResponseField name="status" type="string">
+  Always `processing` (background task started)
+</ResponseField>
+
+<ResponseField name="message" type="string">
+  Confirmation message: "Private ingestion started with provided credentials."
+</ResponseField>
+
+## Examples
+
+### cURL
+
+```bash
+curl -X POST http://localhost:8000/api/get-context-upload \
+  -F "url=https://www.kaggle.com/competitions/private-competition" \
+  -F "top_n=5" \
+  -F "token_file=@/path/to/kaggle.json"
+```
+
+### Python
+
+```python
+import requests
+
+with open('kaggle.json', 'rb') as f:
+    files = {'token_file': f}
+    data = {
+        'url': 'https://www.kaggle.com/competitions/my-private-comp',
+        'top_n': 3
+    }
+    
+    response = requests.post(
+        'http://localhost:8000/api/get-context-upload',
+        files=files,
+        data=data
+    )
+    
+    result = response.json()
+    print(f"Status: {result['status']}")
+    print(f"Message: {result['message']}")
+    print(f"Slug: {result['slug']}")
+```
+
+### JavaScript (Browser)
+
+```javascript
+const formData = new FormData();
+formData.append('url', 'https://www.kaggle.com/competitions/private-comp');
+formData.append('top_n', '5');
+formData.append('token_file', fileInput.files[0]); // from <input type="file">
+
+const response = await fetch('http://localhost:8000/api/get-context-upload', {
+  method: 'POST',
+  body: formData
+});
+
+const data = await response.json();
+console.log(data.message); // "Private ingestion started with provided credentials."
+```
+
+## Background processing
+
+Unlike the public endpoints, this always triggers background processing:
+
+<Steps>
+  <Step title="Submit credentials">
+    POST your URL and `kaggle.json` file
+  </Step>
+  
+  <Step title="Receive processing status">
+    Get immediate response with `processing` status
+  </Step>
+  
+  <Step title="Wait 30-60 seconds">
+    Background job fetches competition data using your credentials
+  </Step>
+  
+  <Step title="Check status">
+    Use `GET /api/competitions/{slug}` to check if processing completed
+  </Step>
+  
+  <Step title="Retrieve results">
+    Once `status` is `completed`, the `toon_content` field contains your data
+  </Step>
+</Steps>
+
+## Credential validation
+
+The endpoint validates your `kaggle.json` before accepting the request:
+
+```python
+# From backend/services/validation_service.py
+async def validate_and_read_token_file(token_file: UploadFile) -> dict:
+    """Validates kaggle.json structure"""
+    content = await token_file.read()
+    data = json.loads(content)
+    
+    if "username" not in data or "key" not in data:
+        raise HTTPException(400, "Invalid kaggle.json format")
+    
+    return data
+```
+
+## Security considerations
+
+<Warning>
+**Your credentials are never stored.** They're used only for the immediate ingestion task and discarded afterward.
+</Warning>
+
+- Credentials are validated but not persisted to the database
+- Used only in the background task context
+- Recommend rotating your Kaggle API token after use
+- KaggleIngest does not log credential contents
+
+## Error responses
+
+<ResponseField name="400" type="error">
+  Invalid kaggle.json format or missing required fields
+  ```json
+  {
+    "detail": "Invalid kaggle.json format"
+  }
+  ```
+</ResponseField>
+
+<ResponseField name="422" type="error">
+  Missing file or invalid form data
+  ```json
+  {
+    "detail": [
+      {
+        "loc": ["body", "token_file"],
+        "msg": "field required",
+        "type": "value_error.missing"
+      }
+    ]
+  }
+  ```
+</ResponseField>
+
+## Checking completion status
+
+After submitting, poll the competition endpoint:
+
+```python
+import time
+import requests
+
+# 1. Submit with credentials
+response = requests.post(
+    'http://localhost:8000/api/get-context-upload',
+    files={'token_file': open('kaggle.json', 'rb')},
+    data={'url': 'https://kaggle.com/c/private-comp', 'top_n': 3}
+)
+slug = response.json()['slug']
+
+# 2. Poll for completion
+for attempt in range(12):  # 2 minutes max
+    time.sleep(10)
+    
+    status_resp = requests.get(f'http://localhost:8000/api/competitions/{slug}')
+    data = status_resp.json()
+    
+    if data['status'] == 'completed':
+        print("Success! Context ready:")
+        print(data['toon_content'])
+        break
+    elif data['status'] == 'failed':
+        print(f"Failed: {data.get('message')}")
+        break
+    else:
+        print(f"Attempt {attempt + 1}: Still processing...")
+```
+
+## Related endpoints
+
+<CardGroup cols={2}>
+  <Card title="Public competitions" icon="globe" href="/api-reference/competitions/get-context">
+    Use the public endpoint for non-private competitions
+  </Card>
+  <Card title="Check status" icon="clock" href="/api-reference/competitions/get-competition">
+    Poll for completion status
+  </Card>
+</CardGroup>

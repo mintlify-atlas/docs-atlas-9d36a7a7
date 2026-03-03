@@ -1,0 +1,197 @@
+---
+title: POST /api/get-context
+description: Fetch competition context from any Kaggle URL
+---
+
+## Overview
+
+The `/api/get-context` endpoint accepts any Kaggle competition URL and returns the token-optimized context. This is a convenience wrapper around `GET /api/competitions/{slug}` that automatically extracts the competition slug from the URL.
+
+**Endpoint:** `POST /api/get-context`
+
+**Authentication:** Not required (uses public Kaggle API)
+
+<Note>
+For private competitions or to use your own Kaggle credentials, use [POST /api/get-context-upload](/api-reference/competitions/get-context-upload) instead.
+</Note>
+
+## Request
+
+<ParamField body="url" type="string" required>
+  Full Kaggle competition URL (e.g., `https://www.kaggle.com/competitions/titanic`)
+</ParamField>
+
+<ParamField body="top_n" type="integer" default={3}>
+  Number of top notebooks to include (1-10). Default: 3
+</ParamField>
+
+<ParamField body="stream" type="boolean" default={false}>
+  Enable streaming response (experimental). Default: false
+</ParamField>
+
+<ParamField body="ignore_patterns" type="array">
+  List of patterns to ignore in notebook content (optional)
+</ParamField>
+
+## Response
+
+Returns a `CompetitionResponse` object with the same structure as [GET /api/competitions/{slug}](/api-reference/competitions/get-competition).
+
+<ResponseField name="slug" type="string">
+  Competition slug extracted from the URL
+</ResponseField>
+
+<ResponseField name="title" type="string">
+  Competition title
+</ResponseField>
+
+<ResponseField name="description" type="string">
+  Competition description
+</ResponseField>
+
+<ResponseField name="metadata" type="object">
+  Competition metadata including prize, team count, evaluation metric
+  <Expandable title="properties">
+    <ResponseField name="title" type="string">
+      Competition title
+    </ResponseField>
+    <ResponseField name="url" type="string">
+      Kaggle competition URL
+    </ResponseField>
+    <ResponseField name="category" type="string">
+      Competition category
+    </ResponseField>
+    <ResponseField name="prize" type="string">
+      Prize amount
+    </ResponseField>
+    <ResponseField name="evaluation" type="string">
+      Evaluation metric
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+<ResponseField name="status" type="string">
+  Processing status: `completed`, `processing`, or `failed`
+</ResponseField>
+
+<ResponseField name="message" type="string">
+  Status message (for processing/failed states)
+</ResponseField>
+
+<ResponseField name="cached_at" type="datetime">
+  Timestamp when data was cached (ISO 8601 format)
+</ResponseField>
+
+<ResponseField name="toon_content" type="string">
+  TOON-formatted competition context (only present when status is `completed`)
+</ResponseField>
+
+## Examples
+
+### cURL
+
+```bash
+curl -X POST http://localhost:8000/api/get-context \
+  -H "Content-Type: application/json" \
+  -d '{
+    "url": "https://www.kaggle.com/competitions/titanic",
+    "top_n": 5
+  }'
+```
+
+### Python
+
+```python
+import requests
+
+response = requests.post(
+    "http://localhost:8000/api/get-context",
+    json={
+        "url": "https://www.kaggle.com/competitions/house-prices-advanced-regression-techniques",
+        "top_n": 3
+    }
+)
+
+data = response.json()
+if data["status"] == "completed":
+    print(data["toon_content"])
+else:
+    print(f"Status: {data['status']} - {data.get('message')}")
+```
+
+### JavaScript
+
+```javascript
+const response = await fetch('http://localhost:8000/api/get-context', {
+  method: 'POST',
+  headers: {
+    'Content-Type': 'application/json',
+  },
+  body: JSON.stringify({
+    url: 'https://www.kaggle.com/competitions/digit-recognizer',
+    top_n: 5
+  })
+});
+
+const data = await response.json();
+console.log(data.status, data.message || data.toon_content);
+```
+
+## Implementation details
+
+This endpoint:
+1. Extracts the competition slug from the provided URL using `KaggleService._extract_slug()`
+2. Delegates to `get_competition_metadata()` from the competitions router
+3. Returns the same response format as `GET /api/competitions/{slug}`
+
+The URL parsing supports multiple Kaggle URL formats:
+- `https://www.kaggle.com/competitions/titanic`
+- `https://kaggle.com/c/titanic`
+- `www.kaggle.com/competitions/titanic`
+
+## Status flow
+
+<Steps>
+  <Step title="Cache miss">
+    If the competition is not cached, you'll receive a `processing` status. The server starts fetching data in the background.
+  </Step>
+  
+  <Step title="Wait and retry">
+    Wait 30-60 seconds and make the same request again.
+  </Step>
+  
+  <Step title="Get results">
+    Once processing completes, the status will be `completed` and `toon_content` will be populated.
+  </Step>
+</Steps>
+
+## Error responses
+
+<ResponseField name="400" type="error">
+  Invalid URL format or missing required fields
+  ```json
+  {
+    "detail": "Invalid competition slug"
+  }
+  ```
+</ResponseField>
+
+<ResponseField name="500" type="error">
+  Server error during processing
+  ```json
+  {
+    "detail": "Failed to fetch competition data"
+  }
+  ```
+</ResponseField>
+
+## Related endpoints
+
+<CardGroup cols={2}>
+  <Card title="Get competition by slug" icon="server" href="/api-reference/competitions/get-competition">
+    Direct access using competition slug
+  </Card>
+  <Card title="Upload Kaggle credentials" icon="upload" href="/api-reference/competitions/get-context-upload">
+    Fetch private competitions with your own credentials
+  </Card>
+</CardGroup>

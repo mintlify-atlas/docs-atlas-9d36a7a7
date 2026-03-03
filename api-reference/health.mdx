@@ -1,0 +1,234 @@
+---
+title: GET /health
+description: Health check endpoint for load balancers and monitoring
+---
+
+## Overview
+
+The `/health` endpoint provides a simple health check for monitoring systems, load balancers, and uptime services. It verifies both application and database connectivity.
+
+**Endpoint:** `GET /health`
+
+**Authentication:** Not required
+
+**Rate limit:** None (unlimited)
+
+## Response
+
+Returns a JSON object with health status and database connection state.
+
+<ResponseField name="status" type="string">
+  Overall health status: `healthy` or `unhealthy`
+</ResponseField>
+
+<ResponseField name="database" type="string">
+  Database connection status: `connected` or error message
+</ResponseField>
+
+<ResponseField name="error" type="string">
+  Error details (only present when status is `unhealthy`)
+</ResponseField>
+
+## Examples
+
+### Success response
+
+```bash
+curl http://localhost:8000/health
+```
+
+```json
+{
+  "status": "healthy",
+  "database": "connected"
+}
+```
+
+### Failure response
+
+If the database connection fails:
+
+```json
+{
+  "status": "unhealthy",
+  "error": "connection pool exhausted"
+}
+```
+
+## Implementation
+
+From `backend/app.py:261`:
+
+```python
+@app.get("/health")
+async def health_check():
+    """Health Check for Load Balancers."""
+    try:
+        pool = Database.get_pool()
+        async with pool.acquire() as conn:
+            await conn.fetchval("SELECT 1")
+        return {"status": "healthy", "database": "connected"}
+    except Exception as e:
+        logger.error(f"Health check failed: {e}")
+        return {"status": "unhealthy", "error": str(e)}
+```
+
+The health check performs:
+1. Acquires a connection from the PostgreSQL pool
+2. Executes a simple `SELECT 1` query
+3. Returns success if the query completes
+4. Returns error details if any step fails
+
+## Use cases
+
+### Load balancer configuration
+
+Configure your load balancer to check `/health`:
+
+**AWS ALB Target Group:**
+```json
+{
+  "HealthCheckPath": "/health",
+  "HealthCheckIntervalSeconds": 30,
+  "HealthCheckTimeoutSeconds": 5,
+  "HealthyThresholdCount": 2,
+  "UnhealthyThresholdCount": 3,
+  "Matcher": {
+    "HttpCode": "200"
+  }
+}
+```
+
+**NGINX upstream:**
+```nginx
+upstream kaggleingest {
+    server backend1:8000;
+    server backend2:8000;
+    
+    health_check interval=10s fails=3 passes=2 uri=/health;
+}
+```
+
+### Kubernetes liveness probe
+
+```yaml
+livenessProbe:
+  httpGet:
+    path: /health
+    port: 8000
+  initialDelaySeconds: 30
+  periodSeconds: 10
+  timeoutSeconds: 5
+  failureThreshold: 3
+```
+
+### Kubernetes readiness probe
+
+```yaml
+readinessProbe:
+  httpGet:
+    path: /health
+    port: 8000
+  initialDelaySeconds: 10
+  periodSeconds: 5
+  timeoutSeconds: 3
+  failureThreshold: 2
+```
+
+### Uptime monitoring
+
+Configure monitoring services like UptimeRobot, Pingdom, or StatusCake:
+- **URL:** `https://api.kaggleingest.com/health`
+- **Check interval:** 1-5 minutes
+- **Expected response:** 200 OK with `"status": "healthy"`
+- **Alert threshold:** 2-3 consecutive failures
+
+### Python health check script
+
+```python
+import requests
+import sys
+
+def check_health(base_url: str) -> bool:
+    """Check if the API is healthy"""
+    try:
+        response = requests.get(f"{base_url}/health", timeout=5)
+        data = response.json()
+        
+        if data.get("status") == "healthy":
+            print("✓ API is healthy")
+            return True
+        else:
+            print(f"✗ API unhealthy: {data.get('error')}")
+            return False
+    except Exception as e:
+        print(f"✗ Health check failed: {e}")
+        return False
+
+if __name__ == "__main__":
+    healthy = check_health("http://localhost:8000")
+    sys.exit(0 if healthy else 1)
+```
+
+## Response headers
+
+The health endpoint includes standard response headers:
+
+```
+HTTP/1.1 200 OK
+content-type: application/json
+content-length: 45
+x-process-time-ms: 12
+```
+
+<Note>
+The `x-process-time-ms` header shows how long the health check took, including database query latency. Values above 100ms may indicate database performance issues.
+</Note>
+
+## Monitoring metrics
+
+Track these metrics from `/health` responses:
+- **Response time:** Should be &lt;50ms under normal load
+- **Success rate:** Should be 100% in healthy state
+- **Database latency:** Inferred from `x-process-time-ms`
+- **Failure patterns:** Intermittent vs. sustained failures
+
+## Troubleshooting
+
+### High response times (&gt;100ms)
+
+Possible causes:
+- Database connection pool exhaustion
+- High database load (check running queries)
+- Network latency between app and database
+
+**Fix:** Scale database connections or add read replicas
+
+### Intermittent failures
+
+Possible causes:
+- Transient network issues
+- Database connection recycling
+- Momentary CPU/memory spikes
+
+**Fix:** Adjust probe timing and failure thresholds
+
+### Sustained failures
+
+Possible causes:
+- Database server down
+- Connection pool misconfiguration
+- Application crash or deadlock
+
+**Fix:** Check application logs and database status
+
+## Related endpoints
+
+<CardGroup cols={2}>
+  <Card title="Rate limits" icon="gauge" href="/api-reference/rate-limits">
+    Check rate limiting configuration
+  </Card>
+  <Card title="Status codes" icon="list" href="/api-reference/status-codes">
+    HTTP status code reference
+  </Card>
+</CardGroup>

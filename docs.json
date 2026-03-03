@@ -64,14 +64,17 @@
             "group": "Competitions",
             "pages": [
               "api-reference/competitions/get-competition",
-              "api-reference/competitions/search"
+              "api-reference/competitions/search",
+              "api-reference/competitions/get-context",
+              "api-reference/competitions/get-context-upload"
             ]
           },
           {
             "group": "Reference",
             "pages": [
               "api-reference/rate-limits",
-              "api-reference/status-codes"
+              "api-reference/status-codes",
+              "api-reference/health"
             ]
           }
         ]
