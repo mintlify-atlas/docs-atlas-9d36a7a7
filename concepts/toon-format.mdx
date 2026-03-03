@@ -1,0 +1,243 @@
+---
+title: TOON format
+description: Token-Oriented Object Notation - a compact, LLM-friendly data serialization format
+---
+
+TOON (Token-Oriented Object Notation) is KaggleIngest's proprietary data format that reduces token usage by 30-60% compared to JSON while maintaining human readability and structural clarity.
+
+## Why TOON?
+
+When working with large language models, token efficiency directly impacts:
+- **Cost**: Fewer tokens = lower API costs
+- **Context window**: More data fits within model limits
+- **Processing speed**: Smaller payloads parse faster
+
+Traditional JSON is verbose with repeated keys, quotes, and brackets. TOON eliminates this redundancy using a table-like structure similar to CSV, but with schema headers and support for nested objects.
+
+## Format structure
+
+<Note>
+TOON v2.0 is currently used in production. The format supports metadata blocks, schema definitions, sample rows, and arrays of structured objects.
+</Note>
+
+A TOON document consists of:
+
+1. **Headers**: Define field names in curly braces `{field1,field2,field3}`
+2. **Optional array size**: `[N]` indicates array length (e.g., `notebooks[5]`)
+3. **Data rows**: Comma-separated values matching header fields
+4. **Blocks**: Named sections for complex nested data
+
+### Basic example
+
+Compare this data in JSON vs TOON:
+
+<CodeGroup>
+```json JSON (178 characters)
+[
+  {"name": "Ana", "age": null, "active": false},
+  {"name": "Bruno", "age": 34, "active": true}
+]
+```
+
+```toon TOON (48 characters - 73% reduction)
+{name,age,active}
+Ana,null,false
+Bruno,34,true
+```
+</CodeGroup>
+
+### Real-world example
+
+Here's how KaggleIngest encodes competition data:
+
+```toon
+metadata{title,deadline,reward,category}
+Titanic - Machine Learning from Disaster,2026-12-31T23:59:59Z,Knowledge,Getting Started
+
+schema[2]{filename,columns,sample_rows}
+train.csv,"[{name: PassengerId, type: int64}, {name: Name, type: string}]",10
+test.csv,"[{name: PassengerId, type: int64}, {name: Name, type: string}]",10
+
+notebooks[3]{title,author,votes,content}
+EDA + Predictions (0.81818),Ash316,2847,"# Exploratory Data Analysis\n..."
+Titanic Top 4% with ensemble modeling,Yassine Ghouzam,1583,"# Introduction\n..."
+Titanic Data Science Solutions,Manav Sehgal,1421,"# Workflow stages\n..."
+```
+
+## Data types and encoding
+
+TOON supports all common data types with automatic type inference:
+
+| Type | Example | Encoding |
+|------|---------|----------|
+| Null | `null` | `null` |
+| Boolean | `true`, `false` | `true`, `false` |
+| Integer | `42` | `42` |
+| Float | `3.14` | `3.14` |
+| String | `Hello` | `Hello` (unquoted if safe) |
+| String (special) | `true`, `2024-01-01` | `"true"` (quoted when needed) |
+| Array | `[1, 2, 3]` | `[1, 2, 3]` |
+| Object | `{a: 1, b: 2}` | `{a: 1, b: 2}` |
+
+<Tip>
+Strings containing commas, brackets, quotes, or resembling keywords (true, false, null) are automatically quoted during encoding.
+</Tip>
+
+## Implementation reference
+
+TOON encoding and decoding is handled by `ToonEncoder` and `ToonDecoder` classes.
+
+### Encoding Python data
+
+```python
+from backend.core.toon_encoder import encode_to_toon
+
+data = {
+    "metadata": {"title": "Titanic", "category": "Getting Started"},
+    "notebooks": [
+        {"title": "EDA Notebook", "author": "John", "votes": 150},
+        {"title": "Predictions", "author": "Jane", "votes": 200}
+    ]
+}
+
+toon_output = encode_to_toon(data)
+print(toon_output)
+```
+
+Output:
+```toon
+metadata{title,category}
+Titanic,Getting Started
+
+notebooks[2]{title,author,votes}
+EDA Notebook,John,150
+Predictions,Jane,200
+```
+
+### Decoding TOON to Python
+
+```python
+from backend.core.toon_encoder import decode_from_toon
+
+toon_text = """
+metadata{title,category}
+Titanic,Getting Started
+
+notebooks[2]{title,author,votes}
+EDA Notebook,John,150
+Predictions,Jane,200
+"""
+
+data = decode_from_toon(toon_text)
+print(data['notebooks'][0]['title'])  # "EDA Notebook"
+```
+
+### Converting between formats
+
+```python
+from backend.core.toon_encoder import json_to_toon, toon_to_json
+
+# JSON to TOON
+json_str = '{"users": [{"name": "Alice", "age": 30}]}'
+toon_str = json_to_toon(json_str)
+
+# TOON to JSON
+json_output = toon_to_json(toon_str, indent=2)
+```
+
+## Validation and error handling
+
+The TOON encoder includes built-in validation:
+
+```python
+from backend.core.toon_encoder import validate_toon
+
+try:
+    validate_toon(toon_content)
+    print("Valid TOON format")
+except ValueError as e:
+    print(f"Validation error: {e}")
+```
+
+Validation checks:
+- Headers follow `section{key,key}` format
+- Data rows match header column counts
+- Structural integrity of blocks
+
+<Info>
+See `backend/core/toon_encoder.py:345` for the complete validation implementation.
+</Info>
+
+## Advanced features
+
+### Array size annotations
+
+TOON v2.0 includes optional array size hints for efficient memory allocation:
+
+```toon
+notebooks[10]{title,author,votes}
+```
+
+The `[10]` indicates this block contains 10 entries, allowing parsers to pre-allocate memory.
+
+### Nested structures
+
+TOON supports nested objects and arrays within cells:
+
+```toon
+schema{filename,columns}
+train.csv,"[{name: Age, type: float64}, {name: Name, type: string}]"
+```
+
+### Multi-block documents
+
+Large datasets are organized into logical blocks:
+
+```toon
+metadata{title,description}
+Competition Title,Description text
+
+schema[3]{filename,rows,columns}
+train.csv,891,12
+test.csv,418,11
+submission.csv,418,2
+
+notebooks[5]{title,content}
+...
+```
+
+## Command-line tools
+
+TOON encoder includes CLI utilities for validation and conversion:
+
+```bash
+# Validate TOON file
+python backend/core/toon_encoder.py data.toon --validate
+
+# Convert TOON to JSON
+python backend/core/toon_encoder.py data.toon --to-json > output.json
+```
+
+## Performance characteristics
+
+| Operation | Performance |
+|-----------|-------------|
+| Encoding | O(n) where n = data size |
+| Decoding | O(n) with single-pass parsing |
+| Token reduction | 30-60% vs JSON |
+| Memory overhead | Minimal (streaming capable) |
+
+<Accordion title="Why not use Protocol Buffers or MessagePack?">
+Binary formats like Protobuf and MessagePack are more compact but not human-readable or LLM-friendly. LLMs work with text tokens, so a text-based format optimized for tokenization provides the best balance of:
+
+- Token efficiency for LLM context windows
+- Human readability for debugging
+- Zero external dependencies (pure Python)
+- Direct integration with text-based AI workflows
+</Accordion>
+
+## Related resources
+
+- Implementation: `backend/core/toon_encoder.py`
+- Usage in API responses: `backend/services/notebook_service.py:501`
+- Format tests: `backend/tests/test_toon_encoder.py`

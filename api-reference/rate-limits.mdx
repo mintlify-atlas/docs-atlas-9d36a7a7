@@ -1,0 +1,161 @@
+---
+title: Rate limits
+description: Understanding rate limiting and how to handle rate limit errors in the KaggleIngest API
+---
+
+## Overview
+
+KaggleIngest uses rate limiting to ensure fair usage and maintain service stability. Rate limits are applied per IP address using the client's real IP (extracted from `X-Forwarded-For` headers when behind load balancers).
+
+## Rate limit structure
+
+### Search endpoint
+
+The search endpoint has the following rate limit:
+
+- **Endpoint**: `/api/search`
+- **Limit**: 20 requests per minute
+- **Scope**: Per IP address
+
+### Other endpoints
+
+Competition metadata endpoints (`/api/competitions/{slug}`) and authentication endpoints are not currently rate limited, but may be subject to rate limiting in future versions.
+
+## Rate limit implementation
+
+KaggleIngest uses [slowapi](https://github.com/laurentS/slowapi) for rate limiting, with IP address extraction from:
+
+1. `X-Forwarded-For` header (for requests behind load balancers/proxies)
+2. Direct client IP (fallback for development environments)
+
+The implementation prioritizes the first non-private IP address from the `X-Forwarded-For` chain to prevent rate limit bypass attempts.
+
+## Rate limit responses
+
+When you exceed the rate limit, you'll receive a `429 Too Many Requests` response:
+
+```json
+{
+  "error": "Rate limit exceeded: 20 per 1 minute"
+}
+```
+
+The response includes standard rate limit headers:
+
+- `X-RateLimit-Limit`: Maximum requests allowed in the time window
+- `X-RateLimit-Remaining`: Requests remaining in current window
+- `X-RateLimit-Reset`: Unix timestamp when the rate limit resets
+- `Retry-After`: Seconds until you can make another request
+
+## Handling rate limits
+
+### Retry strategy
+
+When you receive a 429 response, implement exponential backoff:
+
+```python
+import time
+import requests
+
+def search_with_retry(query, max_retries=3):
+    base_delay = 1  # Start with 1 second
+    
+    for attempt in range(max_retries):
+        response = requests.get(
+            "https://api.kaggleingest.com/api/search",
+            params={"query": query}
+        )
+        
+        if response.status_code == 200:
+            return response.json()
+        
+        if response.status_code == 429:
+            # Check Retry-After header first
+            retry_after = response.headers.get("Retry-After")
+            if retry_after:
+                delay = int(retry_after)
+            else:
+                # Exponential backoff: 1s, 2s, 4s
+                delay = base_delay * (2 ** attempt)
+            
+            print(f"Rate limited. Retrying in {delay}s...")
+            time.sleep(delay)
+            continue
+        
+        # Handle other errors
+        response.raise_for_status()
+    
+    raise Exception("Max retries exceeded")
+```
+
+### Best practices
+
+1. **Cache responses**: Store search results locally to avoid repeated API calls
+2. **Batch requests**: Group multiple operations when possible
+3. **Monitor rate limit headers**: Track `X-RateLimit-Remaining` to avoid hitting limits
+4. **Implement client-side rate limiting**: Space out requests to stay under the limit
+5. **Use webhooks**: For long-running operations, consider polling less frequently
+
+### Request throttling
+
+Implement client-side throttling to avoid hitting rate limits:
+
+```python
+import time
+from collections import deque
+from datetime import datetime, timedelta
+
+class RateLimiter:
+    def __init__(self, max_requests, time_window):
+        self.max_requests = max_requests
+        self.time_window = time_window  # in seconds
+        self.requests = deque()
+    
+    def wait_if_needed(self):
+        now = datetime.now()
+        
+        # Remove requests outside the time window
+        while self.requests and self.requests[0] < now - timedelta(seconds=self.time_window):
+            self.requests.popleft()
+        
+        # If at limit, wait until oldest request expires
+        if len(self.requests) >= self.max_requests:
+            sleep_time = (self.requests[0] + timedelta(seconds=self.time_window) - now).total_seconds()
+            if sleep_time > 0:
+                time.sleep(sleep_time)
+                self.wait_if_needed()  # Recursive check
+        
+        self.requests.append(now)
+
+# Usage
+limiter = RateLimiter(max_requests=20, time_window=60)
+
+for query in search_queries:
+    limiter.wait_if_needed()
+    response = requests.get("https://api.kaggleingest.com/api/search", params={"query": query})
+```
+
+## Increasing rate limits
+
+Rate limits are currently fixed at the application level. If you require higher rate limits for production use:
+
+1. Contact support at [support@kaggleingest.com](mailto:support@kaggleingest.com)
+2. Describe your use case and expected request volume
+3. Enterprise plans may offer custom rate limits
+
+## Performance monitoring
+
+All API responses include the `X-Process-Time-Ms` header, which shows the server-side processing time in milliseconds. This helps you:
+
+- Monitor API performance
+- Identify slow queries
+- Optimize your request patterns
+
+Example response headers:
+
+```
+X-Process-Time-Ms: 142
+X-RateLimit-Limit: 20
+X-RateLimit-Remaining: 18
+X-RateLimit-Reset: 1709500920
+```

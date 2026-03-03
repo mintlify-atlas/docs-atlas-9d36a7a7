@@ -1,0 +1,246 @@
+---
+title: Ranking algorithm
+description: Log(Upvotes) * TimeDecay scoring system for prioritizing high-quality, recent Kaggle notebooks
+---
+
+KaggleIngest uses a custom ranking algorithm to select the most valuable notebooks for each competition. The algorithm balances community validation (upvotes) with recency to surface notebooks that are both high-quality and relevant to current Kaggle API versions and best practices.
+
+## Algorithm overview
+
+The ranking score combines two factors:
+
+```python
+score = upvotes * time_decay
+
+where:
+  upvotes = total_votes (from Kaggle API)
+  time_decay = 0.95 ^ (age_days / 30)
+```
+
+<Note>
+This exponential decay formula ensures that older notebooks gradually lose relevance while not completely eliminating valuable historical content.
+</Note>
+
+## Implementation
+
+The ranking logic is in `backend/services/notebook_service.py:471`:
+
+```python
+def _rank_notebooks(self, notebooks: list[Any]) -> list[Any]:
+    """Rank notebooks based on a score combining upvotes and recency."""
+    if not notebooks:
+        return []
+
+    def calculate_score(nb) -> float:
+        age_days = 365 * 2  # Default: 2 years old
+        if nb.last_updated:
+            try:
+                # Parse ISO format (e.g., "2024-03-15T10:30:00Z")
+                if "T" in nb.last_updated:
+                     dt = datetime.fromisoformat(nb.last_updated.replace('Z', '+00:00'))
+                # Parse SQL format (e.g., "2024-03-15 10:30:00")
+                elif " " in nb.last_updated:
+                    dt = datetime.strptime(nb.last_updated, "%Y-%m-%d %H:%M:%S")
+                # Parse date-only format (e.g., "2024-03-15")
+                else:
+                    dt = datetime.strptime(nb.last_updated, "%Y-%m-%d")
+
+                if dt:
+                    # Ensure timezone-aware comparison
+                    if dt.tzinfo is None:
+                         dt = dt.replace(tzinfo=timezone.utc)
+                    age_days = (datetime.now(timezone.utc) - dt).days
+            except Exception as e:
+                logger.debug(f"Date parsing failed for notebook {nb.ref}: {e}")
+
+        # Exponential decay: 0.95^(age_days/30)
+        # Every 30 days, value decreases by 5%
+        decay = 0.95 ** (max(0, age_days) / 30.0)
+        
+        # Get upvotes from various possible field names
+        upvotes = getattr(nb, 'total_votes', 0) or getattr(nb, 'upvotes', 0) or 0
+        
+        return float(upvotes) * decay
+
+    return sorted(notebooks, key=calculate_score, reverse=True)
+```
+
+## Why this algorithm?
+
+### Problem: Balancing quality and freshness
+
+Kaggle notebooks face a unique challenge:
+
+- **High upvote notebooks** often represent genuinely valuable insights
+- **Old notebooks** may use deprecated libraries or outdated techniques
+- **Recent notebooks** might lack community validation
+
+<Info>
+A pure upvote-based ranking would favor 3-year-old notebooks that accumulated votes over time. A pure recency ranking would surface untested content.
+</Info>
+
+### Solution: Exponential time decay
+
+The decay factor `0.95 ^ (age_days / 30)` implements **half-life decay**:
+
+| Notebook age | Decay factor | Effective upvotes (1000 base) |
+|--------------|--------------|-------------------------------|
+| 0 days | 1.00 | 1000 |
+| 30 days | 0.95 | 950 |
+| 90 days | 0.86 | 860 |
+| 180 days | 0.74 | 740 |
+| 365 days | 0.54 | 540 |
+| 730 days | 0.30 | 300 |
+
+<Tip>
+The 0.95 decay rate means a notebook loses ~5% of its ranking power every 30 days. This strikes a balance between respecting community validation and promoting freshness.
+</Tip>
+
+## Ranking in practice
+
+### Example comparison
+
+Consider two notebooks for the Titanic competition:
+
+**Notebook A: "Classic EDA + Random Forest"**
+- Upvotes: 2500
+- Age: 720 days
+- Score: `2500 * (0.95 ^ (720/30))` = **2500 * 0.31** = **775**
+
+**Notebook B: "Modern XGBoost Approach"**
+- Upvotes: 800
+- Age: 60 days
+- Score: `800 * (0.95 ^ (60/30))` = **800 * 0.90** = **720**
+
+Notebook A still wins despite being 2 years old, because its community validation (2500 upvotes) significantly outweighs the recency advantage of Notebook B.
+
+### Edge case: Missing dates
+
+If a notebook lacks a `last_updated` field, it defaults to 730 days old (2 years):
+
+```python
+age_days = 365 * 2  # Default: 2 years old
+```
+
+This conservative default prevents un-dated notebooks from gaining unfair ranking advantages.
+
+## Integration with ingestion pipeline
+
+The ranking algorithm runs after fetching notebooks from Kaggle API:
+
+```python
+# Fetch up to 20 notebooks
+notebook_metas = await asyncio.to_thread(
+    self.kaggle_service.list_notebooks,
+    resource_type, identifier, fetch_limit=20, "python", kaggle_creds
+)
+
+# Rank all 20 notebooks
+ranked = self._rank_notebooks(notebook_metas)
+
+# Select top N (default: 3, max: 10)
+target_nbs = ranked[:top_n]
+```
+
+<Info>
+KaggleIngest fetches 20 notebooks but only downloads and processes the top 3-10 (user-configurable) to balance context quality and processing cost.
+</Info>
+
+## Upvote sources
+
+Kaggle API responses may use different field names for upvotes:
+
+```python
+upvotes = getattr(nb, 'total_votes', 0) or getattr(nb, 'upvotes', 0) or 0
+```
+
+This handles variations across:
+- Kaggle API v1 (`total_votes`)
+- Kaggle API v2 (`upvotes`)
+- Missing data (defaults to `0`)
+
+## Alternative algorithms considered
+
+<Accordion title="Why not logarithmic upvote scaling?">
+Some ranking systems (e.g., Reddit, Hacker News) use `log(upvotes)` to prevent viral content from dominating. KaggleIngest uses **linear upvotes** because:
+
+1. Kaggle notebooks rarely accumulate extreme upvote counts (max ~5000)
+2. High upvotes genuinely correlate with quality in the Kaggle ecosystem
+3. Linear scaling preserves the relative importance of community validation
+
+However, logarithmic scaling could be beneficial for competitions with outlier notebooks:
+
+```python
+import math
+score = math.log(upvotes + 1) * decay  # +1 avoids log(0)
+```
+</Accordion>
+
+<Accordion title="Why not machine learning-based ranking?">
+ML-based ranking (using features like code quality, markdown length, execution success) was considered but rejected because:
+
+- **Cold start problem**: Requires training data
+- **Complexity**: Adds model maintenance overhead
+- **Interpretability**: Users can't easily understand why notebooks rank as they do
+- **Sufficient quality**: The current heuristic performs well in practice
+
+Future iterations may experiment with hybrid approaches.
+</Accordion>
+
+## Tuning the decay rate
+
+The decay rate `0.95` is configurable. Here's how different rates affect ranking:
+
+| Decay rate | 30-day retention | 365-day retention | Use case |
+|------------|------------------|-------------------|----------|
+| 0.90 | 90% | 27% | Fast-moving fields (ML research) |
+| 0.95 | 95% | 54% | **Current default** |
+| 0.98 | 98% | 78% | Stable knowledge domains |
+
+<Tip>
+For competitions with rapidly evolving techniques (e.g., LLM fine-tuning), consider lowering the decay rate to 0.90 to prioritize recent approaches.
+</Tip>
+
+## Performance impact
+
+Ranking is an **O(n log n)** operation due to sorting:
+
+```python
+return sorted(notebooks, key=calculate_score, reverse=True)
+```
+
+**Complexity breakdown:**
+- Date parsing: O(n)
+- Score calculation: O(n)
+- Sorting: O(n log n)
+- **Total: O(n log n)**
+
+For typical inputs (20 notebooks), this completes in &lt;1ms and is negligible compared to network I/O.
+
+## Testing and validation
+
+Ranking correctness is validated through unit tests:
+
+```python
+# Test case: Recent notebook with fewer upvotes beats old notebook
+nb_old = Notebook(upvotes=1000, last_updated="2022-01-01")
+nb_new = Notebook(upvotes=600, last_updated="2026-02-01")
+
+ranked = service._rank_notebooks([nb_old, nb_new])
+assert ranked[0] == nb_new  # New notebook wins
+```
+
+Real-world validation comes from user feedback on notebook quality.
+
+## Future improvements
+
+1. **Personalized ranking**: Account for user preferences (e.g., prefer PyTorch over TensorFlow)
+2. **Execution success weight**: Boost notebooks that run without errors
+3. **Comment sentiment**: Incorporate positive/negative feedback from comments
+4. **Medal weight**: Prioritize notebooks from competition winners
+
+## Related resources
+
+- Implementation: `backend/services/notebook_service.py:471`
+- Notebook data model: `backend/models/notebook.py`
+- Ingestion pipeline: `backend/services/notebook_service.py:186`

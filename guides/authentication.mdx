@@ -1,0 +1,158 @@
+---
+title: Authentication
+description: Learn how to authenticate with the KaggleIngest API using X-API-Key headers
+---
+
+KaggleIngest uses API key authentication with the `X-API-Key` header. No OAuth or complex flows—just generate your key and start making requests.
+
+## Getting your API key
+
+<Steps>
+  <Step title="Sign up for an account">
+    Create your account by sending a POST request to the `/auth/signup` endpoint:
+
+    ```bash
+    curl -X POST https://api.kaggleingest.com/auth/signup \
+      -H "Content-Type: application/json" \
+      -d '{
+        "email": "your@email.com",
+        "password": "your_secure_password"
+      }'
+    ```
+
+    <Note>
+      Your password must be at least 8 characters long.
+    </Note>
+
+    **Response:**
+    ```json
+    {
+      "message": "Account created successfully",
+      "api_key": "ki_abc123xyz...",
+      "instructions": "Add 'X-API-Key: <your_key>' header to all API requests"
+    }
+    ```
+
+    Your API key starts with `ki_` and is generated using secure random tokens.
+  </Step>
+
+  <Step title="Store your API key securely">
+    Save your API key immediately—you won't be able to retrieve it again. Store it as an environment variable:
+
+    ```bash
+    export KAGGLEINGEST_API_KEY="ki_abc123xyz..."
+    ```
+
+    <Warning>
+      Never commit API keys to version control or share them publicly.
+    </Warning>
+  </Step>
+
+  <Step title="Use the key in requests">
+    Include your API key in the `X-API-Key` header for all API requests:
+
+    ```bash
+    curl https://api.kaggleingest.com/competitions/titanic \
+      -H "X-API-Key: ki_abc123xyz..."
+    ```
+  </Step>
+</Steps>
+
+## Checking your account
+
+Verify your authentication and view account details:
+
+```bash
+curl https://api.kaggleingest.com/auth/me \
+  -H "X-API-Key: ki_abc123xyz..."
+```
+
+**Response:**
+```json
+{
+  "email": "your@email.com",
+  "tier": "free",
+  "credits": 10,
+  "created_at": "2026-03-01T12:00:00Z"
+}
+```
+
+## Authentication errors
+
+### Missing API key
+
+If you forget to include the `X-API-Key` header:
+
+```json
+{
+  "detail": "Missing X-API-Key header. Get your key at https://kaggleingest.com/dashboard"
+}
+```
+
+**HTTP Status:** `401 Unauthorized`
+
+### Invalid API key
+
+If your API key is incorrect or has been revoked:
+
+```json
+{
+  "detail": "Invalid API key"
+}
+```
+
+**HTTP Status:** `403 Forbidden`
+
+## Environment-specific URLs
+
+<Tabs>
+  <Tab title="Production">
+    ```bash
+    BASE_URL="https://api.kaggleingest.com"
+    ```
+  </Tab>
+  <Tab title="Local Development">
+    ```bash
+    BASE_URL="http://localhost:8000"
+    ```
+  </Tab>
+</Tabs>
+
+## Credits and tiers
+
+New accounts start with:
+- **Tier:** Free
+- **Credits:** 10 initial credits
+
+Each API request consumes credits based on the operation. Check your remaining credits with the `/auth/me` endpoint.
+
+## Best practices
+
+<Steps>
+  <Step title="Use environment variables">
+    Never hardcode API keys in your application code. Use environment variables or secure secret managers.
+  </Step>
+
+  <Step title="Rotate keys regularly">
+    Periodically generate new API keys and revoke old ones to minimize security risks.
+  </Step>
+
+  <Step title="Monitor usage">
+    Track your credit consumption by calling `/auth/me` to avoid unexpected service interruptions.
+  </Step>
+
+  <Step title="Handle errors gracefully">
+    Always check for 401/403 responses and prompt users to verify their API keys.
+  </Step>
+</Steps>
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Search competitions" icon="magnifying-glass" href="/guides/searching-competitions">
+    Learn how to find competitions by slug
+  </Card>
+  <Card title="Fetch context" icon="download" href="/guides/getting-context">
+    Understand the dual-track ingestion system
+  </Card>
+</CardGroup>

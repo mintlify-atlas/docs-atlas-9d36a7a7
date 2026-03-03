@@ -1,0 +1,523 @@
+---
+title: Error handling
+description: Common errors and how to handle them in the KaggleIngest API
+---
+
+KaggleIngest uses standard HTTP status codes and structured error responses. This guide covers common errors and recommended handling strategies.
+
+## Error response format
+
+All errors follow FastAPI's default format:
+
+```json
+{
+  "detail": "Human-readable error message"
+}
+```
+
+Some errors may include additional context:
+
+```json
+{
+  "detail": "Signup failed: Email already registered"
+}
+```
+
+## Authentication errors
+
+### Missing API key
+
+**Status Code:** `401 Unauthorized`
+
+**Cause:** Request missing the `X-API-Key` header
+
+**Response:**
+```json
+{
+  "detail": "Missing X-API-Key header. Get your key at https://kaggleingest.com/dashboard"
+}
+```
+
+**Solution:**
+```bash
+# ❌ Missing header
+curl https://api.kaggleingest.com/competitions/titanic
+
+# ✅ Include X-API-Key
+curl https://api.kaggleingest.com/competitions/titanic \
+  -H "X-API-Key: ki_abc123xyz..."
+```
+
+### Invalid API key
+
+**Status Code:** `403 Forbidden`
+
+**Cause:** API key doesn't exist in the database or has been revoked
+
+**Response:**
+```json
+{
+  "detail": "Invalid API key"
+}
+```
+
+**Solutions:**
+- Verify the API key is correct (check for typos)
+- Generate a new API key if the old one was lost
+- Ensure you're using the production key for production API
+
+<CodeGroup>
+```python Python
+import requests
+
+resp = requests.get(
+    "https://api.kaggleingest.com/competitions/titanic",
+    headers={"X-API-Key": "ki_abc123xyz..."}
+)
+
+if resp.status_code == 401:
+    print("Missing API key header")
+elif resp.status_code == 403:
+    print("Invalid API key - check your credentials")
+elif resp.status_code == 200:
+    data = resp.json()
+    print(f"Success: {data['title']}")
+```
+
+```javascript JavaScript
+const resp = await fetch(
+  "https://api.kaggleingest.com/competitions/titanic",
+  { headers: { "X-API-Key": "ki_abc123xyz..." } }
+);
+
+if (resp.status === 401) {
+  console.error("Missing API key header");
+} else if (resp.status === 403) {
+  console.error("Invalid API key - check your credentials");
+} else if (resp.ok) {
+  const data = await resp.json();
+  console.log(`Success: ${data.title}`);
+}
+```
+</CodeGroup>
+
+## Signup errors
+
+### Weak password
+
+**Status Code:** `400 Bad Request`
+
+**Cause:** Password is shorter than 8 characters
+
+**Response:**
+```json
+{
+  "detail": "Password must be at least 8 characters"
+}
+```
+
+**Solution:**
+```bash
+# ❌ Weak password
+curl -X POST https://api.kaggleingest.com/auth/signup \
+  -H "Content-Type: application/json" \
+  -d '{"email": "user@example.com", "password": "weak"}'
+
+# ✅ Strong password
+curl -X POST https://api.kaggleingest.com/auth/signup \
+  -H "Content-Type: application/json" \
+  -d '{"email": "user@example.com", "password": "SecurePass123!"}'
+```
+
+### Email already registered
+
+**Status Code:** `409 Conflict`
+
+**Cause:** Email already exists in the database
+
+**Response:**
+```json
+{
+  "detail": "Email already registered"
+}
+```
+
+**Solutions:**
+- Use a different email address
+- Reset your password if you forgot your API key
+- Contact support to recover your account
+
+### Invalid email format
+
+**Status Code:** `422 Unprocessable Entity`
+
+**Cause:** Email doesn't match RFC 5322 format
+
+**Response:**
+```json
+{
+  "detail": [
+    {
+      "type": "value_error",
+      "loc": ["body", "email"],
+      "msg": "value is not a valid email address",
+      "input": "not-an-email"
+    }
+  ]
+}
+```
+
+**Solution:**
+```bash
+# ❌ Invalid email
+curl -X POST https://api.kaggleingest.com/auth/signup \
+  -d '{"email": "not-an-email", "password": "SecurePass123!"}'
+
+# ✅ Valid email
+curl -X POST https://api.kaggleingest.com/auth/signup \
+  -d '{"email": "user@example.com", "password": "SecurePass123!"}'
+```
+
+## Competition errors
+
+### Invalid competition slug
+
+**Status Code:** `400 Bad Request`
+
+**Cause:** Slug is empty or contains only whitespace
+
+**Response:**
+```json
+{
+  "detail": "Invalid competition slug"
+}
+```
+
+**Solution:**
+```bash
+# ❌ Empty slug
+curl https://api.kaggleingest.com/competitions/ \
+  -H "X-API-Key: ki_abc123xyz..."
+
+# ❌ Whitespace-only slug
+curl https://api.kaggleingest.com/competitions/%20%20 \
+  -H "X-API-Key: ki_abc123xyz..."
+
+# ✅ Valid slug
+curl https://api.kaggleingest.com/competitions/titanic \
+  -H "X-API-Key: ki_abc123xyz..."
+```
+
+### Competition not found
+
+**What happens:** The API doesn't return a 404—instead, it attempts to fetch from Kaggle and stores the result.
+
+If the competition doesn't exist on Kaggle:
+1. First request returns `status: "processing"`
+2. Background task fails to fetch from Kaggle API
+3. Status updates to `failed` with error message in database
+4. Next request automatically retries
+
+**Response (eventual failure):**
+```json
+{
+  "slug": "non-existent-competition",
+  "title": "Retrying...",
+  "status": "processing",
+  "message": "Retrying competition data fetch. Check back in 30-60 seconds."
+}
+```
+
+<Note>
+  The system will keep retrying on each request. If a competition consistently fails, it likely doesn't exist on Kaggle or requires special credentials.
+</Note>
+
+### Processing timeout
+
+**Scenario:** You request a competition, get `processing` status, but it never completes.
+
+**Possible causes:**
+- Kaggle API is down or slow
+- Competition has many large notebooks (>10MB each)
+- Rate limiting from Kaggle side
+- Network connectivity issues
+
+**Recommended handling:**
+
+<CodeGroup>
+```python Python
+import time
+import requests
+
+api_key = "ki_abc123xyz..."
+slug = "titanic"
+max_retries = 10
+retry_delay = 10  # seconds
+
+for attempt in range(max_retries):
+    resp = requests.get(
+        f"https://api.kaggleingest.com/competitions/{slug}",
+        headers={"X-API-Key": api_key}
+    )
+    data = resp.json()
+    
+    if data["status"] == "completed":
+        print("Success!")
+        break
+    elif data["status"] == "processing":
+        print(f"Attempt {attempt + 1}/{max_retries}: Still processing...")
+        time.sleep(retry_delay)
+    else:
+        print(f"Unexpected status: {data['status']}")
+        break
+else:
+    print("Timed out waiting for competition data")
+```
+
+```javascript JavaScript
+const apiKey = "ki_abc123xyz...";
+const slug = "titanic";
+const maxRetries = 10;
+const retryDelay = 10000; // milliseconds
+
+for (let attempt = 0; attempt < maxRetries; attempt++) {
+  const resp = await fetch(
+    `https://api.kaggleingest.com/competitions/${slug}`,
+    { headers: { "X-API-Key": apiKey } }
+  );
+  const data = await resp.json();
+
+  if (data.status === "completed") {
+    console.log("Success!");
+    break;
+  } else if (data.status === "processing") {
+    console.log(`Attempt ${attempt + 1}/${maxRetries}: Still processing...`);
+    await new Promise(resolve => setTimeout(resolve, retryDelay));
+  } else {
+    console.log(`Unexpected status: ${data.status}`);
+    break;
+  }
+  
+  if (attempt === maxRetries - 1) {
+    console.error("Timed out waiting for competition data");
+  }
+}
+```
+</CodeGroup>
+
+## Rate limiting
+
+**Status Code:** `429 Too Many Requests`
+
+**Cause:** Exceeded the rate limit (default: 20 requests per minute)
+
+**Response:**
+```json
+{
+  "detail": "Rate limit exceeded. Retry after 60 seconds."
+}
+```
+
+**Handling:**
+
+<CodeGroup>
+```python Python
+import requests
+import time
+
+def api_request_with_retry(url, headers, max_retries=3):
+    for attempt in range(max_retries):
+        resp = requests.get(url, headers=headers)
+        
+        if resp.status_code == 429:
+            retry_after = int(resp.headers.get("Retry-After", 60))
+            print(f"Rate limited. Waiting {retry_after} seconds...")
+            time.sleep(retry_after)
+            continue
+        
+        return resp
+    
+    raise Exception("Max retries exceeded")
+
+# Usage
+resp = api_request_with_retry(
+    "https://api.kaggleingest.com/competitions/titanic",
+    {"X-API-Key": "ki_abc123xyz..."}
+)
+```
+
+```javascript JavaScript
+async function apiRequestWithRetry(url, headers, maxRetries = 3) {
+  for (let attempt = 0; attempt < maxRetries; attempt++) {
+    const resp = await fetch(url, { headers });
+    
+    if (resp.status === 429) {
+      const retryAfter = parseInt(resp.headers.get("Retry-After") || "60");
+      console.log(`Rate limited. Waiting ${retryAfter} seconds...`);
+      await new Promise(resolve => setTimeout(resolve, retryAfter * 1000));
+      continue;
+    }
+    
+    return resp;
+  }
+  
+  throw new Error("Max retries exceeded");
+}
+
+// Usage
+const resp = await apiRequestWithRetry(
+  "https://api.kaggleingest.com/competitions/titanic",
+  { "X-API-Key": "ki_abc123xyz..." }
+);
+```
+</CodeGroup>
+
+<Warning>
+  Rate limits are per IP address (using `X-Forwarded-For` header). If you're behind a proxy or load balancer, ensure the header is set correctly.
+</Warning>
+
+## Database errors
+
+### Connection pool exhausted
+
+**Status Code:** `500 Internal Server Error`
+
+**Cause:** Too many concurrent database connections
+
+**Response:**
+```json
+{
+  "detail": "Database pool not available in background task: ..."
+}
+```
+
+**Solution:** This is a server-side issue. Contact support or wait a few minutes for the pool to recover.
+
+### Background task failures
+
+If a background task fails during processing, the competition status is updated to `failed` with an error message stored in the database.
+
+**Next request behavior:**
+```json
+{
+  "slug": "problematic-competition",
+  "title": "Retrying...",
+  "status": "processing",
+  "message": "Retrying competition data fetch. Check back in 30-60 seconds."
+}
+```
+
+The system automatically retries, but if failures persist:
+- Check if the competition exists on Kaggle
+- Verify Kaggle API credentials are valid (server-side)
+- Report the issue with the competition slug
+
+## Kaggle API errors
+
+KaggleIngest depends on the Kaggle API. If Kaggle is down or returns errors:
+
+### Metadata errors
+
+```python
+class MetadataError(KaggleIngestionError):
+    """Error fetching metadata."""
+```
+
+**Causes:**
+- Competition doesn't exist
+- Private competition (requires team membership)
+- Kaggle API is temporarily unavailable
+
+### Notebook download errors
+
+```python
+class NotebookDownloadError(KaggleIngestionError):
+    """Error downloading notebooks."""
+```
+
+**Causes:**
+- Notebook was deleted or made private
+- Rate limiting from Kaggle
+- Network timeout
+
+**Behavior:** The system skips failed notebooks and continues with the rest. Check the `stats` field (if available) for `failed_notebooks`.
+
+### URL parse errors
+
+```python
+class URLParseError(KaggleIngestionError):
+    """Error parsing Kaggle URL."""
+```
+
+**Note:** The API uses slugs directly, so URL parsing errors are rare. This exception is primarily for internal use.
+
+## Best practices for error handling
+
+<Steps>
+  <Step title="Check status codes first">
+    Always check HTTP status codes before parsing JSON:
+    ```python
+    if resp.status_code != 200:
+        print(f"Error {resp.status_code}: {resp.json()['detail']}")
+    ```
+  </Step>
+
+  <Step title="Handle processing state gracefully">
+    Implement polling with exponential backoff:
+    ```python
+    retries = 0
+    while data["status"] == "processing" and retries < 10:
+        time.sleep(min(10 * (2 ** retries), 60))  # Cap at 60 seconds
+        data = fetch_competition(slug)
+        retries += 1
+    ```
+  </Step>
+
+  <Step title="Retry transient errors">
+    Implement retry logic for 429, 500, 502, 503, 504 errors:
+    ```python
+    transient_errors = [429, 500, 502, 503, 504]
+    if resp.status_code in transient_errors:
+        # Retry with exponential backoff
+    ```
+  </Step>
+
+  <Step title="Log errors with context">
+    Include the competition slug, API key prefix, and timestamp:
+    ```python
+    logger.error(f"Failed to fetch {slug}: {resp.status_code} - {resp.text}")
+    ```
+  </Step>
+
+  <Step title="Fail fast on auth errors">
+    Don't retry 401/403 errors—fix the API key instead:
+    ```python
+    if resp.status_code in [401, 403]:
+        raise Exception("Invalid API key. Check your credentials.")
+    ```
+  </Step>
+</Steps>
+
+## Error handling checklist
+
+- [ ] Check HTTP status code before parsing JSON
+- [ ] Handle 401/403 auth errors (don't retry)
+- [ ] Implement retry logic for 429/500 errors
+- [ ] Poll for `processing` status with timeouts
+- [ ] Log errors with competition slug and timestamp
+- [ ] Display user-friendly error messages
+- [ ] Monitor rate limit headers (`X-RateLimit-Remaining`)
+- [ ] Validate input before making requests (slug format, email format)
+- [ ] Handle network timeouts gracefully
+- [ ] Test with non-existent competition slugs
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="API Reference" icon="code" href="/api-reference/auth/signup">
+    View the complete API documentation
+  </Card>
+  <Card title="Authentication" icon="key" href="/guides/authentication">
+    Learn about API key authentication
+  </Card>
+</CardGroup>

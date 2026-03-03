@@ -1,0 +1,437 @@
+---
+title: Getting competition context
+description: Understand the dual-track ingestion system for instant cached results and background fetches
+---
+
+KaggleIngest uses a **dual-track system** to balance speed and freshness:
+- **Instant:** Return cached data immediately if available
+- **Background:** Fetch from Kaggle API asynchronously for cache misses
+
+## How it works
+
+When you request competition data, KaggleIngest checks the cache first:
+
+<Steps>
+  <Step title="Cache check">
+    Query PostgreSQL for existing data with the competition slug.
+  </Step>
+
+  <Step title="Cache hit (completed)">
+    If data exists and status is `completed`, return immediately with full context.
+
+    **Response time:** ~50-200ms
+  </Step>
+
+  <Step title="Cache miss">
+    If no data exists, insert a `processing` record and trigger a background fetch.
+
+    **Response time:** ~50-200ms (returns `processing` status)
+  </Step>
+
+  <Step title="Background fetch">
+    Asynchronously fetch metadata, notebooks, and schema from Kaggle API.
+
+    **Duration:** 30-60 seconds (depends on notebook count)
+  </Step>
+
+  <Step title="Cache update">
+    Store the fetched data in PostgreSQL with status `completed`.
+  </Step>
+</Steps>
+
+## Making your first request
+
+<CodeGroup>
+```bash First request (cache miss)
+curl https://api.kaggleingest.com/competitions/spaceship-titanic \
+  -H "X-API-Key: ki_abc123xyz..."
+```
+
+```json Response: Processing
+{
+  "slug": "spaceship-titanic",
+  "title": "Fetching...",
+  "status": "processing",
+  "message": "Fetching competition data. Refresh in 30-60 seconds."
+}
+```
+</CodeGroup>
+
+Wait 30-60 seconds, then retry:
+
+<CodeGroup>
+```bash Second request (cache hit)
+curl https://api.kaggleingest.com/competitions/spaceship-titanic \
+  -H "X-API-Key: ki_abc123xyz..."
+```
+
+```json Response: Completed
+{
+  "slug": "spaceship-titanic",
+  "title": "Spaceship Titanic",
+  "description": "Predict which passengers are transported to an alternate dimension",
+  "metadata": {
+    "title": "Spaceship Titanic",
+    "url": "https://www.kaggle.com/competitions/spaceship-titanic",
+    "category": "Featured",
+    "prize": "$25,000",
+    "evaluation": "Accuracy",
+    "team_count": 2500,
+    "leaderboard": [
+      {"team": "TopTeam", "score": 0.82}
+    ]
+  },
+  "status": "completed",
+  "cached_at": "2026-03-03T08:15:30Z",
+  "toon_content": "# COMPETITION: Spaceship Titanic\n\n## Overview\n...\n\n## Top Notebooks\n..."
+}
+```
+</CodeGroup>
+
+## Understanding the TOON format
+
+The `toon_content` field contains the full competition context in a structured text format optimized for LLM consumption:
+
+```
+# COMPETITION: Spaceship Titanic
+
+## Overview
+Title: Spaceship Titanic
+Category: Featured
+Prize: $25,000
+Evaluation: Accuracy
+Teams: 2500
+
+## Description
+Predict which passengers are transported to an alternate dimension...
+
+## Dataset Schema
+File: train.csv
+  - PassengerId (string)
+  - HomePlanet (string)
+  - CryoSleep (boolean)
+  - Cabin (string)
+  - Destination (string)
+  - Age (float)
+  - VIP (boolean)
+  - Transported (boolean)
+
+## Top Notebooks
+
+### Notebook 1: Comprehensive EDA + Modeling (Author: topkaggler)
+Upvotes: 450
+
+#### Markdown Insights:
+- Feature engineering is crucial for this competition
+- CryoSleep correlates strongly with Transported
+- Group bookings (shared cabin prefix) have similar outcomes
+
+#### Code Highlights:
+```python
+# Feature engineering
+df['CabinDeck'] = df['Cabin'].str.split('/').str[0]
+df['CabinNum'] = df['Cabin'].str.split('/').str[1].astype(float)
+```
+
+...
+```
+
+## Status states in detail
+
+### 1. Processing
+
+Returned when:
+- First request for a new competition
+- Cached data is expired (>3 days old)
+- Previous fetch failed and is being retried
+
+**Response:**
+```json
+{
+  "slug": "competition-name",
+  "title": "Fetching..." | "Updating cache..." | "Retrying...",
+  "status": "processing",
+  "message": "Fetching competition data. Refresh in 30-60 seconds."
+}
+```
+
+**What's happening:** Background task is:
+1. Fetching competition metadata from Kaggle API
+2. Listing and ranking notebooks by upvotes
+3. Downloading top N notebooks (default: 3, max: 10)
+4. Parsing notebook JSON files
+5. Extracting markdown and code cells
+6. Generating TOON format output
+7. Storing in PostgreSQL cache
+
+### 2. Completed
+
+Returned when:
+- Data exists in cache and is fresh (&lt;3 days)
+- Background fetch completed successfully
+
+**Response:**
+```json
+{
+  "slug": "competition-name",
+  "title": "Competition Title",
+  "description": "Full description",
+  "metadata": { /* ... */ },
+  "status": "completed",
+  "cached_at": "2026-03-03T08:15:30Z",
+  "toon_content": "# Full context..."
+}
+```
+
+**Cache duration:** 3 days (`TTL_COMPETITION = 259200` seconds)
+
+### 3. Failed
+
+Returned when:
+- Kaggle API returns an error
+- Competition slug doesn't exist
+- Network issues during fetch
+
+On the next request, the system automatically retries by updating status to `processing`.
+
+**Response:**
+```json
+{
+  "slug": "invalid-comp",
+  "title": "Retrying...",
+  "status": "processing",
+  "message": "Retrying competition data fetch. Check back in 30-60 seconds."
+}
+```
+
+## Dynamic notebook slicing
+
+KaggleIngest caches up to **10 notebooks** per competition but lets you request fewer dynamically:
+
+```bash
+# Request only top 3 (default)
+curl https://api.kaggleingest.com/competitions/titanic \
+  -H "X-API-Key: ki_abc123xyz..."
+
+# Request top 5
+curl "https://api.kaggleingest.com/competitions/titanic?top_n=5" \
+  -H "X-API-Key: ki_abc123xyz..."
+
+# Request all 10 (max)
+curl "https://api.kaggleingest.com/competitions/titanic?top_n=10" \
+  -H "X-API-Key: ki_abc123xyz..."
+```
+
+<Note>
+  The `top_n` parameter only affects cached competitions. During the initial `processing` phase, the system always fetches the maximum (10 notebooks).
+</Note>
+
+## Cache expiration and refresh
+
+Competition data expires after **3 days**. When you request expired data:
+
+<Steps>
+  <Step title="Detect expiration">
+    System checks if `cached_at + TTL_COMPETITION > now()`
+  </Step>
+
+  <Step title="Trigger refresh">
+    Update status to `processing` and start background fetch
+  </Step>
+
+  <Step title="Return processing status">
+    ```json
+    {
+      "status": "processing",
+      "message": "Cached data is older than 30 days. Refreshing from Kaggle..."
+    }
+    ```
+  </Step>
+
+  <Step title="Wait and retry">
+    After 30-60 seconds, the cache is updated with fresh data
+  </Step>
+</Steps>
+
+## Concurrency and race conditions
+
+KaggleIngest uses **per-slug locks** to prevent duplicate background fetches:
+
+```python
+INGESTION_LOCKS: Dict[str, asyncio.Lock] = {}
+
+async with INGESTION_LOCKS[slug]:
+    # Only one task per slug can execute at a time
+    # Double-check status inside lock to avoid redundant work
+```
+
+If multiple requests arrive simultaneously for the same competition:
+1. First request inserts `processing` record and starts background fetch
+2. Subsequent requests see `processing` status and return immediately
+3. All requests wait for the same background task to complete
+
+## Polling for completion
+
+Recommended polling strategy:
+
+<CodeGroup>
+```python Python
+import time
+import requests
+
+api_key = "ki_abc123xyz..."
+slug = "spaceship-titanic"
+
+while True:
+    resp = requests.get(
+        f"https://api.kaggleingest.com/competitions/{slug}",
+        headers={"X-API-Key": api_key}
+    )
+    data = resp.json()
+    
+    if data["status"] == "completed":
+        print("Data ready!")
+        print(data["toon_content"])
+        break
+    elif data["status"] == "processing":
+        print("Still processing, waiting 10 seconds...")
+        time.sleep(10)
+    else:
+        print(f"Unexpected status: {data['status']}")
+        break
+```
+
+```javascript JavaScript
+const apiKey = "ki_abc123xyz...";
+const slug = "spaceship-titanic";
+
+async function waitForCompletion() {
+  while (true) {
+    const resp = await fetch(
+      `https://api.kaggleingest.com/competitions/${slug}`,
+      { headers: { "X-API-Key": apiKey } }
+    );
+    const data = await resp.json();
+
+    if (data.status === "completed") {
+      console.log("Data ready!");
+      console.log(data.toon_content);
+      break;
+    } else if (data.status === "processing") {
+      console.log("Still processing, waiting 10 seconds...");
+      await new Promise(resolve => setTimeout(resolve, 10000));
+    } else {
+      console.log(`Unexpected status: ${data.status}`);
+      break;
+    }
+  }
+}
+
+waitForCompletion();
+```
+
+```bash Bash
+API_KEY="ki_abc123xyz..."
+SLUG="spaceship-titanic"
+
+while true; do
+  RESPONSE=$(curl -s https://api.kaggleingest.com/competitions/$SLUG \
+    -H "X-API-Key: $API_KEY")
+  
+  STATUS=$(echo $RESPONSE | jq -r '.status')
+  
+  if [ "$STATUS" = "completed" ]; then
+    echo "Data ready!"
+    echo $RESPONSE | jq -r '.toon_content'
+    break
+  elif [ "$STATUS" = "processing" ]; then
+    echo "Still processing, waiting 10 seconds..."
+    sleep 10
+  else
+    echo "Unexpected status: $STATUS"
+    break
+  fi
+done
+```
+</CodeGroup>
+
+## Background fetch details
+
+What happens during the background fetch:
+
+<Steps>
+  <Step title="Fetch competition metadata">
+    ```python
+    comp_meta = k_service.get_competition_metadata(slug)
+    # Returns: title, description, category, prize, metric, team_count, etc.
+    ```
+  </Step>
+
+  <Step title="List dataset files">
+    ```python
+    files = k_service.list_files("competition", slug)
+    schema = [{"filename": f, "columns": []} for f in files[:5]]
+    ```
+  </Step>
+
+  <Step title="Fetch and rank notebooks">
+    ```python
+    nb_meta_list = k_service.list_notebooks("competition", slug, limit=10)
+    ranked_nbs = service._rank_notebooks(nb_meta_list)  # Sort by upvotes
+    ```
+  </Step>
+
+  <Step title="Download notebooks">
+    ```python
+    for nb in ranked_nbs[:10]:
+        # Download .ipynb file
+        # Parse JSON
+        # Extract markdown and code cells
+        # Clean and format
+    ```
+  </Step>
+
+  <Step title="Generate TOON format">
+    ```python
+    toon_content = service.format_output(full_data, "toon")
+    # Combines metadata + schema + notebooks into unified text
+    ```
+  </Step>
+
+  <Step title="Store in cache">
+    ```python
+    await pool.execute(
+        "UPDATE competition_cache SET "
+        "title=$1, metadata=$2, notebooks=$3, toon_content=$4, status='completed' "
+        "WHERE slug=$5",
+        title, metadata, notebooks, toon_content, slug
+    )
+    ```
+  </Step>
+</Steps>
+
+## Legacy cache support
+
+Older cached entries may not have the raw `notebooks` JSON field. In this case:
+- System returns the pre-generated `toon_content` (fallback)
+- Triggers a background update to refresh the cache structure
+- Next request will have full dynamic slicing support
+
+<Warning>
+  If you see this warning in logs, the cache is being updated:
+  ```
+  ⚠️ Legacy cache detected for {slug} (missing raw notebooks). 
+  Returning fallback and triggering update.
+  ```
+</Warning>
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Error handling" icon="triangle-exclamation" href="/guides/error-handling">
+    Handle common errors and edge cases
+  </Card>
+  <Card title="API Reference" icon="code" href="/api-reference/competitions/get-competition">
+    View the full API documentation
+  </Card>
+</CardGroup>

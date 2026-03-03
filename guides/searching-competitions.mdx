@@ -1,0 +1,241 @@
+---
+title: Searching for competitions
+description: How to access Kaggle competition data by slug
+---
+
+KaggleIngest uses competition slugs (URL identifiers) to fetch data. You don't search by keyword—instead, you provide the exact competition slug from the Kaggle URL.
+
+## Understanding competition slugs
+
+A competition slug is the unique identifier in the Kaggle URL:
+
+```
+https://www.kaggle.com/competitions/titanic
+                                      ^^^^^^^ <- This is the slug
+```
+
+Common examples:
+- `titanic`
+- `house-prices-advanced-regression-techniques`
+- `digit-recognizer`
+- `store-sales-time-series-forecasting`
+- `nlp-getting-started`
+
+## Fetching competition data
+
+Use the GET `/competitions/{slug}` endpoint:
+
+```bash
+curl https://api.kaggleingest.com/competitions/titanic \
+  -H "X-API-Key: ki_abc123xyz..."
+```
+
+### Response format
+
+<CodeGroup>
+```json Cached (Instant)
+{
+  "slug": "titanic",
+  "title": "Titanic - Machine Learning from Disaster",
+  "description": "Start here! Predict survival on the Titanic...",
+  "metadata": {
+    "title": "Titanic - Machine Learning from Disaster",
+    "url": "https://www.kaggle.com/competitions/titanic",
+    "category": "Getting Started",
+    "prize": "Knowledge",
+    "evaluation": "Accuracy",
+    "team_count": 15000,
+    "leaderboard": [
+      {"team": "TeamA", "score": 0.85},
+      {"team": "TeamB", "score": 0.84}
+    ]
+  },
+  "status": "completed",
+  "cached_at": "2026-03-01T10:30:00Z",
+  "toon_content": "# COMPETITION: Titanic\n\n## Overview\n..."
+}
+```
+
+```json Processing (Background Fetch)
+{
+  "slug": "new-competition",
+  "title": "Fetching...",
+  "status": "processing",
+  "message": "Fetching competition data. Refresh in 30-60 seconds."
+}
+```
+
+```json Failed (Retry)
+{
+  "slug": "invalid-competition",
+  "title": "Retrying...",
+  "status": "processing",
+  "message": "Retrying competition data fetch. Check back in 30-60 seconds."
+}
+```
+</CodeGroup>
+
+## Status flow
+
+Competition requests follow a three-state lifecycle:
+
+<Steps>
+  <Step title="Processing">
+    First request triggers background fetch from Kaggle API. Returns immediately with `status: "processing"`.
+
+    **Typical duration:** 30-60 seconds
+
+    ```json
+    {
+      "status": "processing",
+      "message": "Fetching competition data. Refresh in 30-60 seconds."
+    }
+    ```
+  </Step>
+
+  <Step title="Completed">
+    Data successfully fetched and cached. Returns full context with notebooks and metadata.
+
+    **Cache duration:** 3 days (configurable with `TTL_COMPETITION`)
+
+    ```json
+    {
+      "status": "completed",
+      "cached_at": "2026-03-01T10:30:00Z",
+      "toon_content": "# Full competition context..."
+    }
+    ```
+  </Step>
+
+  <Step title="Failed">
+    Fetch failed (invalid slug, Kaggle API error, etc.). Automatically retries on next request.
+
+    ```json
+    {
+      "status": "processing",
+      "message": "Retrying competition data fetch. Check back in 30-60 seconds."
+    }
+    ```
+  </Step>
+</Steps>
+
+## Controlling notebook count
+
+By default, KaggleIngest returns the top 3 notebooks. You can request more using the `top_n` query parameter:
+
+```bash
+curl "https://api.kaggleingest.com/competitions/titanic?top_n=5" \
+  -H "X-API-Key: ki_abc123xyz..."
+```
+
+<Note>
+  The maximum allowed is 10 notebooks (`MAX_NOTEBOOKS`). Requesting more than 10 will be capped.
+</Note>
+
+### Notebook limits
+
+- **Minimum:** 1 notebook
+- **Default:** 3 notebooks
+- **Maximum:** 10 notebooks
+
+## Cache expiration
+
+Cached data expires after **3 days** (`TTL_COMPETITION = 259200` seconds). When you request an expired competition:
+
+```json
+{
+  "slug": "titanic",
+  "title": "Updating cache...",
+  "status": "processing",
+  "message": "Cached data is older than 30 days. Refreshing from Kaggle..."
+}
+```
+
+The system automatically refreshes the data in the background. Wait 30-60 seconds and retry your request.
+
+## Finding competition slugs
+
+<Steps>
+  <Step title="Browse Kaggle">
+    Visit [kaggle.com/competitions](https://www.kaggle.com/competitions) and find a competition that interests you.
+  </Step>
+
+  <Step title="Extract the slug">
+    Copy the slug from the URL:
+    ```
+    https://www.kaggle.com/competitions/house-prices-advanced-regression-techniques
+                                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ```
+  </Step>
+
+  <Step title="Make the request">
+    ```bash
+    curl https://api.kaggleingest.com/competitions/house-prices-advanced-regression-techniques \
+      -H "X-API-Key: ki_abc123xyz..."
+    ```
+  </Step>
+</Steps>
+
+## Popular competitions
+
+These competitions are pre-cached for instant responses:
+
+<CardGroup cols={2}>
+  <Card title="Titanic" icon="ship">
+    ```
+    GET /competitions/titanic
+    ```
+  </Card>
+  <Card title="House Prices" icon="house">
+    ```
+    GET /competitions/house-prices-advanced-regression-techniques
+    ```
+  </Card>
+  <Card title="Digit Recognizer" icon="hashtag">
+    ```
+    GET /competitions/digit-recognizer
+    ```
+  </Card>
+  <Card title="Store Sales" icon="chart-line">
+    ```
+    GET /competitions/store-sales-time-series-forecasting
+    ```
+  </Card>
+</CardGroup>
+
+## Error handling
+
+### Invalid slug format
+
+```bash
+curl https://api.kaggleingest.com/competitions/ \
+  -H "X-API-Key: ki_abc123xyz..."
+```
+
+**Response:**
+```json
+{
+  "detail": "Invalid competition slug"
+}
+```
+
+**HTTP Status:** `400 Bad Request`
+
+### Competition not found
+
+If the slug doesn't exist on Kaggle, the status will eventually transition to `failed`. The system will retry automatically on subsequent requests.
+
+<Warning>
+  Always check the `status` field in the response. If it's `processing`, wait and retry.
+</Warning>
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Get context" icon="download" href="/guides/getting-context">
+    Learn about the dual-track ingestion system
+  </Card>
+  <Card title="Error handling" icon="triangle-exclamation" href="/guides/error-handling">
+    Handle common errors and edge cases
+  </Card>
+</CardGroup>

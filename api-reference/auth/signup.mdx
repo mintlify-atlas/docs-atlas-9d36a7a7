@@ -1,0 +1,117 @@
+---
+title: 'POST /api/auth/signup'
+description: 'Create a new user account and receive an API key'
+---
+
+## Endpoint
+
+```
+POST /api/auth/signup
+```
+
+Create a new KaggleIngest account with email and password. Returns an API key that you'll use to authenticate all subsequent requests. New accounts start with 10 free credits.
+
+## Request Body
+
+<ParamField body="email" type="string" required>
+  User's email address. Must be a valid email format.
+</ParamField>
+
+<ParamField body="password" type="string" required>
+  Account password. Must be at least 8 characters long.
+</ParamField>
+
+## Response
+
+<ResponseField name="message" type="string">
+  Success message confirming account creation.
+</ResponseField>
+
+<ResponseField name="api_key" type="string">
+  Your generated API key. Format: `ki_...` followed by 32 random characters. Store this securely - you'll need it for all API requests.
+</ResponseField>
+
+<ResponseField name="instructions" type="string">
+  Instructions on how to use your API key in requests.
+</ResponseField>
+
+## Example Request
+
+```bash cURL
+curl -X POST https://api.kaggleingest.com/api/auth/signup \
+  -H "Content-Type: application/json" \
+  -d '{
+    "email": "user@example.com",
+    "password": "securepassword123"
+  }'
+```
+
+```python Python
+import requests
+
+response = requests.post(
+    "https://api.kaggleingest.com/api/auth/signup",
+    json={
+        "email": "user@example.com",
+        "password": "securepassword123"
+    }
+)
+
+data = response.json()
+api_key = data["api_key"]
+print(f"Your API key: {api_key}")
+```
+
+```javascript JavaScript
+const response = await fetch('https://api.kaggleingest.com/api/auth/signup', {
+  method: 'POST',
+  headers: {
+    'Content-Type': 'application/json',
+  },
+  body: JSON.stringify({
+    email: 'user@example.com',
+    password: 'securepassword123'
+  })
+});
+
+const data = await response.json();
+console.log('Your API key:', data.api_key);
+```
+
+## Example Response
+
+```json 200 - Success
+{
+  "message": "Account created successfully",
+  "api_key": "ki_Xk2pL9mN4vQ7rT8sW1yZ3bC5dE6fG0hJ",
+  "instructions": "Add 'X-API-Key: <your_key>' header to all API requests"
+}
+```
+
+## Error Responses
+
+```json 400 - Invalid Password
+{
+  "detail": "Password must be at least 8 characters"
+}
+```
+
+```json 409 - Email Already Exists
+{
+  "detail": "Email already registered"
+}
+```
+
+```json 500 - Server Error
+{
+  "detail": "Signup failed: [error details]"
+}
+```
+
+## Notes
+
+- No OAuth required - simple email/password authentication
+- API keys start with the `ki_` prefix
+- Free tier accounts receive 10 credits upon signup
+- Store your API key securely - it won't be shown again
+- Use the `X-API-Key` header for all authenticated requests

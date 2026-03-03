@@ -1,0 +1,378 @@
+---
+title: Installation
+description: Set up KaggleIngest locally for development or self-hosting
+---
+
+# Installation
+
+Run KaggleIngest on your own infrastructure for development, testing, or self-hosting.
+
+## Prerequisites
+
+Before you begin, ensure you have:
+
+- **Python 3.11+** with `uv` package manager (recommended) or `pip`
+- **Node.js 18+** and `npm` for the frontend
+- **PostgreSQL 14+** running locally or accessible remotely
+- **Kaggle API credentials** (username and API key from [kaggle.com/settings](https://kaggle.com/settings))
+
+## Architecture
+
+KaggleIngest consists of three main components:
+
+1. **Backend API**: FastAPI application (`backend/app.py`)
+2. **Frontend UI**: React application with Vite
+3. **PostgreSQL Database**: Caching, search, and user management
+
+## Quick installation
+
+Clone the repository and set up both backend and frontend:
+
+```bash
+git clone https://github.com/Anand-0037/KaggleIngest
+cd KaggleIngest
+```
+
+<Steps>
+  <Step title="Set up the backend">
+    Install dependencies and configure environment variables.
+
+    ```bash
+    cd backend
+    uv sync
+    ```
+
+    <Note>
+      Using `uv` is recommended for faster dependency resolution. If you don't have `uv`, install it with `pip install uv` or use `pip install -r requirements.txt` instead.
+    </Note>
+
+    ### Configure environment
+
+    Copy the example environment file:
+
+    ```bash
+    cp .env.example .env
+    ```
+
+    Edit `.env` and add your credentials:
+
+    ```bash
+    # PostgreSQL Connection
+    POSTGRES_URL=postgresql://postgres:postgres@localhost:5432/kaggleingest_dev
+
+    # Kaggle API Credentials
+    KAGGLE_USERNAME=your_kaggle_username
+    KAGGLE_KEY=your_kaggle_api_key
+
+    # Environment
+    ENV=development
+
+    # CORS (Frontend URLs)
+    CORS_ORIGINS=http://localhost:5173,http://localhost:3000
+
+    # Rate Limiting
+    RATE_LIMIT=20
+
+    # Logging
+    LOG_LEVEL=INFO
+    ```
+
+    <Warning>
+      Never commit your `.env` file to version control. The `.gitignore` already excludes it, but be cautious when sharing code.
+    </Warning>
+
+    ### Get Kaggle credentials
+
+    1. Go to [kaggle.com/settings](https://kaggle.com/settings)
+    2. Scroll to the **API** section
+    3. Click **Create New API Token**
+    4. Extract `username` and `key` from the downloaded `kaggle.json` file
+
+    ### Set up PostgreSQL
+
+    Create a database for KaggleIngest:
+
+    ```bash
+    # Connect to PostgreSQL
+    psql -U postgres
+
+    # Create database
+    CREATE DATABASE kaggleingest_dev;
+
+    # Exit psql
+    \q
+    ```
+
+    The backend will automatically create required tables on first run.
+  </Step>
+
+  <Step title="Set up the frontend">
+    Install frontend dependencies.
+
+    ```bash
+    cd ../frontend
+    npm install
+    ```
+
+    The frontend is pre-configured to connect to `http://localhost:8000` for the backend API.
+  </Step>
+
+  <Step title="Start the services">
+    Run both backend and frontend in separate terminal windows.
+
+    ### Start the backend
+
+    ```bash
+    cd backend
+    uvicorn backend.app:app --reload
+    ```
+
+    The API will be available at `http://localhost:8000`.
+
+    <Note>
+      The `--reload` flag enables auto-reload on code changes during development.
+    </Note>
+
+    ### Start the frontend
+
+    In a new terminal:
+
+    ```bash
+    cd frontend
+    npm run dev
+    ```
+
+    The UI will be available at `http://localhost:5173`.
+  </Step>
+</Steps>
+
+## Verify installation
+
+Test that everything is working correctly.
+
+### Health check
+
+```bash
+curl http://localhost:8000/health
+```
+
+Expected response:
+
+```json
+{
+  "status": "healthy",
+  "database": "connected"
+}
+```
+
+### Create a test account
+
+```bash
+curl -X POST http://localhost:8000/api/auth/signup \
+  -H "Content-Type: application/json" \
+  -d '{
+    "email": "test@example.com",
+    "password": "testpass123"
+  }'
+```
+
+Save the returned API key for testing.
+
+### Test the API
+
+```bash
+export API_KEY="ki_your_api_key_here"
+
+curl "http://localhost:8000/api/search?query=titanic" \
+  -H "X-API-Key: $API_KEY"
+```
+
+## Production deployment
+
+For production deployments, consider the following:
+
+### Environment configuration
+
+Update your `.env` for production:
+
+```bash
+ENV=production
+POSTGRES_URL=postgresql://user:password@production-host:5432/kaggleingest
+CORS_ORIGINS=https://yourdomain.com
+SENTRY_DSN=your_sentry_dsn
+PROMETHEUS_ENABLED=true
+```
+
+<Warning>
+  In production, `POSTGRES_URL` and `KAGGLE_USERNAME`/`KAGGLE_KEY` are **required**. The application will refuse to start without them.
+</Warning>
+
+### Run with Gunicorn
+
+For production workloads, use a production ASGI server:
+
+```bash
+gunicorn backend.app:app \
+  --workers 4 \
+  --worker-class uvicorn.workers.UvicornWorker \
+  --bind 0.0.0.0:8000 \
+  --timeout 300
+```
+
+### Docker deployment
+
+Create a `Dockerfile` for containerized deployment:
+
+```dockerfile
+FROM python:3.11-slim
+
+WORKDIR /app
+
+COPY backend/requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+COPY backend/ ./backend/
+
+EXPOSE 8000
+
+CMD ["uvicorn", "backend.app:app", "--host", "0.0.0.0", "--port", "8000"]
+```
+
+Build and run:
+
+```bash
+docker build -t kaggleingest .
+docker run -p 8000:8000 --env-file .env kaggleingest
+```
+
+### Frontend build
+
+Build the frontend for production:
+
+```bash
+cd frontend
+npm run build
+```
+
+The optimized static files will be in `frontend/dist/`. Serve them with Nginx, Vercel, or any static hosting provider.
+
+## Development tips
+
+### Code formatting
+
+The backend uses `black` for formatting:
+
+```bash
+cd backend
+black backend/
+```
+
+The frontend uses `prettier`:
+
+```bash
+cd frontend
+npm run format
+```
+
+### Linting
+
+Backend linting with `mypy`:
+
+```bash
+cd backend
+mypy backend/
+```
+
+Frontend linting:
+
+```bash
+cd frontend
+npm run lint
+```
+
+### Database migrations
+
+Schema changes should be applied carefully. The application uses raw SQL for schema management. Check `backend/core/database.py` for the initialization logic.
+
+## Configuration reference
+
+Key configuration options from `backend/config.py`:
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `ENV` | `development` | Environment mode (`development` or `production`) |
+| `POSTGRES_URL` | *(required)* | PostgreSQL connection string |
+| `KAGGLE_USERNAME` | *(required)* | Your Kaggle username |
+| `KAGGLE_KEY` | *(required)* | Your Kaggle API key |
+| `CORS_ORIGINS` | `http://localhost:5173` | Comma-separated allowed origins |
+| `RATE_LIMIT` | `20` | Requests per minute per IP |
+| `LOG_LEVEL` | `INFO` | Logging level (`DEBUG`, `INFO`, `WARNING`, `ERROR`) |
+| `MAX_CSV_FILES` | `3` | Max CSV files to parse for dataset schemas |
+| `SENTRY_DSN` | *(optional)* | Sentry error tracking DSN |
+| `PROMETHEUS_ENABLED` | `true` | Enable Prometheus metrics at `/api/metrics` |
+
+## Troubleshooting
+
+### Backend won't start
+
+**Error**: `CRITICAL: Missing required environment variables`
+
+**Solution**: Ensure `KAGGLE_USERNAME`, `KAGGLE_KEY`, and `POSTGRES_URL` are set in `.env`.
+
+### Database connection fails
+
+**Error**: `Failed to connect to database`
+
+**Solution**: Verify PostgreSQL is running and credentials are correct:
+
+```bash
+psql -h localhost -U postgres -d kaggleingest_dev
+```
+
+### Frontend can't reach backend
+
+**Error**: `Network Error` or `CORS policy`
+
+**Solution**: Ensure:
+1. Backend is running on `http://localhost:8000`
+2. Frontend origin is listed in `CORS_ORIGINS`
+3. No firewall blocking port 8000
+
+### Kaggle API fails
+
+**Error**: `401 Unauthorized` from Kaggle API
+
+**Solution**: Verify your Kaggle credentials are correct and your Kaggle account has API access enabled.
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card
+    title="Core concepts"
+    icon="lightbulb"
+    href="/concepts/toon-format"
+  >
+    Learn about TOON format and caching architecture
+  </Card>
+  <Card
+    title="API reference"
+    icon="book"
+    href="/api-reference/auth/signup"
+  >
+    Explore available endpoints and integration patterns
+  </Card>
+  <Card
+    title="Authentication"
+    icon="key"
+    href="/guides/authentication"
+  >
+    Learn about API key authentication
+  </Card>
+  <Card
+    title="Quick start"
+    icon="rocket"
+    href="/quickstart"
+  >
+    Use the hosted API instead of self-hosting
+  </Card>
+</CardGroup>

@@ -1,0 +1,257 @@
+---
+title: "Get Competition Metadata"
+description: "Retrieve competition metadata with instant response for cached data or processing status for new competitions"
+---
+
+# GET /api/competitions/{slug}
+
+Retrieve metadata for a specific Kaggle competition. This endpoint implements a dual-track system:
+- **Instant response** for cached competitions (served from PostgreSQL)
+- **Processing status** for new competitions (triggers background fetch from Kaggle API)
+
+## Endpoint
+
+```
+GET /api/competitions/{slug}
+```
+
+## Path Parameters
+
+<ParamField path="slug" type="string" required>
+  The competition slug (identifier) from the Kaggle competition URL.
+  
+  **Example:** For `https://www.kaggle.com/c/titanic`, the slug is `titanic`
+</ParamField>
+
+## Query Parameters
+
+<ParamField query="top_n" type="integer" default="3">
+  Number of top notebooks to include in the response (1-10).
+  
+  **Default:** 3  
+  **Range:** 1-10 notebooks
+</ParamField>
+
+## Response
+
+The response format varies based on the competition's cache status:
+
+### Status: `completed`
+
+Returned when competition data is cached and ready.
+
+<ResponseField name="slug" type="string">
+  Competition identifier
+</ResponseField>
+
+<ResponseField name="title" type="string">
+  Full competition title
+</ResponseField>
+
+<ResponseField name="description" type="string">
+  Competition description text
+</ResponseField>
+
+<ResponseField name="status" type="string">
+  Cache status. Value: `completed`
+</ResponseField>
+
+<ResponseField name="cached_at" type="datetime">
+  Timestamp when data was originally fetched from Kaggle
+</ResponseField>
+
+<ResponseField name="metadata" type="object">
+  Competition metadata object
+  
+  <Expandable title="properties">
+    <ResponseField name="title" type="string">
+      Competition title
+    </ResponseField>
+    
+    <ResponseField name="url" type="string">
+      Full Kaggle competition URL
+    </ResponseField>
+    
+    <ResponseField name="category" type="string">
+      Competition category (e.g., "Getting Started", "Featured")
+    </ResponseField>
+    
+    <ResponseField name="prize" type="string">
+      Prize information (e.g., "Knowledge", "$100,000")
+    </ResponseField>
+    
+    <ResponseField name="evaluation" type="string">
+      Evaluation metric (e.g., "Accuracy", "RMSE")
+    </ResponseField>
+    
+    <ResponseField name="team_count" type="integer">
+      Total number of participating teams
+    </ResponseField>
+    
+    <ResponseField name="leaderboard" type="array">
+      Top 10 leaderboard entries with team names and scores
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+<ResponseField name="toon_content" type="string">
+  TOON-formatted competition context including:
+  - Competition metadata
+  - Dataset schema information
+  - Top N notebooks (code and markdown cells)
+  
+  Optimized for LLM consumption with minimal tokens.
+</ResponseField>
+
+<ResponseField name="message" type="string" optional>
+  Additional status information (only present for non-completed statuses)
+</ResponseField>
+
+### Status: `processing`
+
+Returned when competition data is being fetched in the background.
+
+<ResponseField name="slug" type="string">
+  Competition identifier
+</ResponseField>
+
+<ResponseField name="title" type="string">
+  Status message (e.g., "Processing...", "Fetching...")
+</ResponseField>
+
+<ResponseField name="status" type="string">
+  Cache status. Value: `processing`
+</ResponseField>
+
+<ResponseField name="message" type="string">
+  Detailed message with expected wait time:
+  - "Fetching competition data. Refresh in 30-60 seconds." (new competition)
+  - "Competition data is being fetched. Check back in 30 seconds." (in progress)
+  - "Cached data is older than 30 days. Refreshing from Kaggle..." (expired cache)
+</ResponseField>
+
+### Status: `failed`
+
+Returned when a previous fetch attempt failed. Making a request automatically triggers a retry.
+
+<ResponseField name="slug" type="string">
+  Competition identifier
+</ResponseField>
+
+<ResponseField name="title" type="string">
+  Value: "Retrying..."
+</ResponseField>
+
+<ResponseField name="status" type="string">
+  Cache status. Value: `processing` (status updated to processing on retry)
+</ResponseField>
+
+<ResponseField name="message" type="string">
+  Value: "Retrying competition data fetch. Check back in 30-60 seconds."
+</ResponseField>
+
+## Cache Behavior
+
+### Cache Expiration
+
+Competition data is cached for **30 days** (configurable via `TTL_COMPETITION`). When you request an expired competition:
+1. You receive a `processing` status response
+2. Background refresh is triggered automatically
+3. Fresh data will be available in 30-60 seconds
+
+### Cache Flow
+
+1. **Cache Hit (Fresh)**: Instant response with `completed` status and full TOON content
+2. **Cache Hit (Expired)**: Returns `processing` status, triggers background refresh
+3. **Cache Miss**: Returns `processing` status, initiates first-time fetch
+4. **Processing**: Returns `processing` status while background task runs
+5. **Failed**: Automatically retries fetch, returns `processing` status
+
+## Examples
+
+### Request: Cached Competition
+
+```bash
+curl https://api.kaggleingest.com/api/competitions/titanic
+```
+
+### Response: Completed
+
+```json
+{
+  "slug": "titanic",
+  "title": "Titanic - Machine Learning from Disaster",
+  "description": "Start here! Predict survival on the Titanic and get familiar with ML basics",
+  "status": "completed",
+  "cached_at": "2026-02-15T14:23:45.123456Z",
+  "metadata": {
+    "title": "Titanic - Machine Learning from Disaster",
+    "url": "https://www.kaggle.com/c/titanic",
+    "category": "Getting Started",
+    "prize": "Knowledge",
+    "evaluation": "Accuracy",
+    "team_count": 15234,
+    "leaderboard": [
+      {"teamId": 1234, "teamName": "Team Alpha", "score": 0.98765},
+      {"teamId": 5678, "teamName": "ML Masters", "score": 0.98543}
+    ]
+  },
+  "toon_content": "# COMPETITION: Titanic - Machine Learning from Disaster\n\n## METADATA\nCategory: Getting Started\nPrize: Knowledge\n...\n\n## TOP NOTEBOOKS\n### Notebook 1: titanic-data-science-solutions\nAuthor: startupsci\nUpvotes: 12543\n...\n"
+}
+```
+
+### Request: New Competition
+
+```bash
+curl https://api.kaggleingest.com/api/competitions/house-prices-advanced-regression-techniques
+```
+
+### Response: Processing
+
+```json
+{
+  "slug": "house-prices-advanced-regression-techniques",
+  "title": "Fetching...",
+  "status": "processing",
+  "message": "Fetching competition data. Refresh in 30-60 seconds."
+}
+```
+
+### Request: With Custom Notebook Count
+
+```bash
+curl https://api.kaggleingest.com/api/competitions/titanic?top_n=5
+```
+
+This returns the top 5 notebooks instead of the default 3.
+
+## Error Responses
+
+### 400 Bad Request
+
+Returned when the slug parameter is empty or invalid.
+
+```json
+{
+  "detail": "Invalid competition slug"
+}
+```
+
+### 429 Too Many Requests
+
+Returned when rate limit is exceeded (20 requests per minute).
+
+```json
+{
+  "detail": "Rate limit exceeded"
+}
+```
+
+## Notes
+
+- Competition data includes metadata, dataset schema, and top-ranked notebooks
+- Background fetching typically completes in 30-60 seconds
+- Notebooks are ranked by upvotes and recency
+- TOON format optimizes token usage for LLM consumption
+- Cache is automatically refreshed every 30 days
+- Maximum 10 notebooks can be stored; requests for more than 10 will be capped

@@ -1,0 +1,291 @@
+---
+title: "Search Competitions"
+description: "Search cached competitions using hybrid full-text and fuzzy search powered by PostgreSQL"
+---
+
+# GET /api/search
+
+Search through cached Kaggle competitions using a hybrid search strategy that combines:
+- **Exact slug matching** for precise lookups
+- **Full-text search (FTS)** using PostgreSQL's `tsvector` for natural language queries
+- **Fuzzy matching** with trigram similarity (`pg_trgm`) for typo-tolerant searches
+
+Only competitions with `status = 'completed'` are included in search results.
+
+## Endpoint
+
+```
+GET /api/search
+```
+
+## Query Parameters
+
+<ParamField query="query" type="string" required>
+  Search query string. Can be:
+  - **Exact slug**: `titanic`
+  - **Partial title**: `house prices`
+  - **Keywords**: `regression`, `nlp`, `computer vision`
+  - **Fuzzy match**: `titanik` (will match "titanic")
+  
+  Searches across competition slugs, titles, and descriptions.
+</ParamField>
+
+## Response
+
+<ResponseField name="results" type="array">
+  Array of matching competition objects, ordered by relevance score (highest first)
+  
+  <Expandable title="Competition Object">
+    <ResponseField name="slug" type="string">
+      Competition identifier
+    </ResponseField>
+    
+    <ResponseField name="title" type="string">
+      Full competition title
+    </ResponseField>
+    
+    <ResponseField name="description" type="string">
+      Competition description text
+    </ResponseField>
+    
+    <ResponseField name="metadata" type="object">
+      Competition metadata (structure matches the GET /api/competitions/{slug} metadata field)
+      
+      <Expandable title="properties">
+        <ResponseField name="title" type="string">
+          Competition title
+        </ResponseField>
+        
+        <ResponseField name="url" type="string">
+          Full Kaggle competition URL
+        </ResponseField>
+        
+        <ResponseField name="category" type="string">
+          Competition category
+        </ResponseField>
+        
+        <ResponseField name="prize" type="string">
+          Prize information
+        </ResponseField>
+        
+        <ResponseField name="evaluation" type="string">
+          Evaluation metric
+        </ResponseField>
+        
+        <ResponseField name="team_count" type="integer">
+          Number of participating teams
+        </ResponseField>
+        
+        <ResponseField name="leaderboard" type="array">
+          Top 10 leaderboard entries
+        </ResponseField>
+      </Expandable>
+    </ResponseField>
+    
+    <ResponseField name="score" type="float">
+      Relevance score for the match:
+      - **10.0**: Exact slug match
+      - **0.0-1.0**: Full-text search rank (higher = more relevant)
+      - **0.1-1.0**: Trigram similarity score (1.0 = identical)
+      
+      Results are sorted by score in descending order.
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+## Search Strategy
+
+The search uses a multi-strategy approach with three parallel queries:
+
+### 1. Exact Match (Score: 10.0)
+
+Matches the exact competition slug:
+```sql
+WHERE slug = 'titanic' AND status = 'completed'
+```
+
+### 2. Full-Text Search (FTS)
+
+Uses PostgreSQL's built-in FTS with `ts_rank` for relevance scoring:
+```sql
+WHERE search_vector @@ plainto_tsquery('english', 'house prices')
+```
+
+Searches across:
+- Competition title
+- Description
+- Metadata fields
+
+### 3. Fuzzy Trigram Matching
+
+Handles typos and partial matches using `pg_trgm`:
+```sql
+WHERE similarity(title, 'titanik') > 0.1
+```
+
+Examples:
+- `titanik` → matches `titanic`
+- `regresion` → matches `regression`
+- `house pric` → matches `house prices`
+
+### Result Ranking
+
+Results are deduplicated and sorted by the highest score from any matching strategy:
+1. Exact slug matches appear first (score: 10.0)
+2. Followed by FTS matches (ranked by relevance)
+3. Then fuzzy matches (ranked by similarity)
+
+Maximum 20 results returned per query.
+
+## Examples
+
+### Request: Exact Slug
+
+```bash
+curl "https://api.kaggleingest.com/api/search?query=titanic"
+```
+
+### Response: Exact Match
+
+```json
+{
+  "results": [
+    {
+      "slug": "titanic",
+      "title": "Titanic - Machine Learning from Disaster",
+      "description": "Start here! Predict survival on the Titanic and get familiar with ML basics",
+      "metadata": {
+        "title": "Titanic - Machine Learning from Disaster",
+        "url": "https://www.kaggle.com/c/titanic",
+        "category": "Getting Started",
+        "prize": "Knowledge",
+        "evaluation": "Accuracy",
+        "team_count": 15234,
+        "leaderboard": []
+      },
+      "score": 10.0
+    }
+  ]
+}
+```
+
+### Request: Keyword Search
+
+```bash
+curl "https://api.kaggleingest.com/api/search?query=house+prices"
+```
+
+### Response: Multiple Matches
+
+```json
+{
+  "results": [
+    {
+      "slug": "house-prices-advanced-regression-techniques",
+      "title": "House Prices: Advanced Regression Techniques",
+      "description": "Predict sales prices and practice feature engineering, RFs, and gradient boosting",
+      "metadata": {
+        "title": "House Prices: Advanced Regression Techniques",
+        "url": "https://www.kaggle.com/c/house-prices-advanced-regression-techniques",
+        "category": "Getting Started",
+        "prize": "Knowledge",
+        "evaluation": "RMSE",
+        "team_count": 5234,
+        "leaderboard": []
+      },
+      "score": 0.8743
+    },
+    {
+      "slug": "california-house-prices",
+      "title": "California House Prices",
+      "description": "Predict house prices in California using census data",
+      "metadata": {
+        "title": "California House Prices",
+        "url": "https://www.kaggle.com/c/california-house-prices",
+        "category": "Playground",
+        "prize": "Knowledge",
+        "evaluation": "RMSE",
+        "team_count": 1523,
+        "leaderboard": []
+      },
+      "score": 0.6421
+    }
+  ]
+}
+```
+
+### Request: Fuzzy Search (Typo)
+
+```bash
+curl "https://api.kaggleingest.com/api/search?query=titanik"
+```
+
+### Response: Fuzzy Match
+
+```json
+{
+  "results": [
+    {
+      "slug": "titanic",
+      "title": "Titanic - Machine Learning from Disaster",
+      "description": "Start here! Predict survival on the Titanic and get familiar with ML basics",
+      "metadata": {
+        "title": "Titanic - Machine Learning from Disaster",
+        "url": "https://www.kaggle.com/c/titanic",
+        "category": "Getting Started",
+        "prize": "Knowledge",
+        "evaluation": "Accuracy",
+        "team_count": 15234,
+        "leaderboard": []
+      },
+      "score": 0.7142
+    }
+  ]
+}
+```
+
+### Request: Empty Results
+
+```bash
+curl "https://api.kaggleingest.com/api/search?query=nonexistent"
+```
+
+### Response: No Matches
+
+```json
+{
+  "results": []
+}
+```
+
+## Error Responses
+
+### 429 Too Many Requests
+
+Rate limit exceeded (20 requests per minute).
+
+```json
+{
+  "detail": "Rate limit exceeded"
+}
+```
+
+### 500 Internal Server Error
+
+Search query failed due to database or internal error.
+
+```json
+{
+  "detail": "Search failed"
+}
+```
+
+## Notes
+
+- Only cached competitions with `status = 'completed'` are searchable
+- Empty query returns an empty results array
+- Results are limited to 20 competitions per query
+- Trigram similarity threshold is 0.1 (10% similarity)
+- Requires PostgreSQL extensions: `pg_trgm` and `tsvector`
+- Search is case-insensitive
+- Duplicate results are automatically deduplicated by slug

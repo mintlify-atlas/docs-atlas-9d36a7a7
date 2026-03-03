@@ -1,0 +1,106 @@
+---
+title: Welcome to KaggleIngest
+description: Transform Kaggle competitions and notebooks into token-optimized context for AI assistants
+---
+
+# Welcome to KaggleIngest
+
+**The High-Performance Bridge Between Kaggle Data and LLMs.**
+
+KaggleIngest transforms complex Kaggle competitions, datasets, and notebooks into token-optimized context for AI assistants. It eliminates noise and intelligently ranks high-signal implementation patterns to help you win competitions faster.
+
+## Why KaggleIngest?
+
+Building competitive machine learning solutions requires understanding past winning approaches, effective feature engineering, and optimal model architectures. KaggleIngest automatically extracts and ranks the most valuable insights from thousands of Kaggle notebooks, delivering them in a format optimized for AI assistant consumption.
+
+<CardGroup cols={2}>
+  <Card
+    title="Quick start"
+    icon="rocket"
+    href="/quickstart"
+  >
+    Get from signup to your first API call in under 5 minutes
+  </Card>
+  <Card
+    title="Installation"
+    icon="download"
+    href="/installation"
+  >
+    Set up KaggleIngest locally for development or self-hosting
+  </Card>
+  <Card
+    title="API reference"
+    icon="code"
+    href="/api-reference/auth/signup"
+  >
+    Complete API documentation with examples and schemas
+  </Card>
+  <Card
+    title="Core concepts"
+    icon="lightbulb"
+    href="/concepts/toon-format"
+  >
+    Learn about TOON format and ranking algorithms
+  </Card>
+</CardGroup>
+
+## Core capabilities
+
+### Smart context ranking
+
+Our custom scoring algorithm (`Log(Upvotes) * TimeDecay`) prioritizes recent, high-quality solution patterns. You get the most relevant notebooks first, not just the most popular ones from years ago.
+
+### Token-Oriented Object Notation (TOON)
+
+A proprietary format that reduces token consumption by up to 60% while preserving structural metadata for LLMs. TOON delivers competition metadata, dataset schemas, sample data, and top notebook content in a single, optimized payload.
+
+### Dual-track ingestion
+
+Instant context for cached competitions with zero-latency hits. For new competitions, automated background fetching ensures you're never left waiting.
+
+### PostgreSQL-as-Everything architecture
+
+<Note>
+  We've evolved from SQLite/Redis to a unified PostgreSQL engine for state management, ranked search, and audit-compliant caching. High-performance `UNLOGGED` tables provide maximum write throughput during ingestion.
+</Note>
+
+## Features at a glance
+
+- **API-first security**: Robust `X-API-Key` authentication with tiered credit management
+- **Multi-strategy search**: Full-text search (FTS) combined with trigram similarity for typo-tolerant results
+- **Robust parsing**: Hardened support for legacy `nbformat`, multi-encoding CSVs, and malformed datasets
+- **Free tier**: 10 credits per user to get started
+- **FastAPI backend**: High-performance async Python API
+- **React frontend**: Modern web interface for exploration and testing
+
+## Architecture overview
+
+KaggleIngest is built as a production-ready SaaS platform:
+
+- **Backend**: FastAPI with asyncpg for high-throughput PostgreSQL access
+- **Frontend**: React with Vite for fast development and optimal production builds
+- **Database**: PostgreSQL for caching, search, user management, and audit logs
+- **Authentication**: Simple API key-based authentication with credit tracking
+- **Rate limiting**: SlowAPI integration to prevent abuse
+- **Observability**: Sentry for error tracking, Prometheus for metrics
+
+## Getting started
+
+Ready to transform how you approach Kaggle competitions?
+
+<CardGroup cols={2}>
+  <Card
+    title="Quick start guide"
+    icon="play"
+    href="/quickstart"
+  >
+    Create an account and make your first API call
+  </Card>
+  <Card
+    title="Local installation"
+    icon="server"
+    href="/installation"
+  >
+    Run KaggleIngest on your own infrastructure
+  </Card>
+</CardGroup>

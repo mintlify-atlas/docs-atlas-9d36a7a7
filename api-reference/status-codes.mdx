@@ -1,0 +1,413 @@
+---
+title: Status codes
+description: HTTP status codes and error response formats used by the KaggleIngest API
+---
+
+## Overview
+
+The KaggleIngest API uses standard HTTP status codes to indicate the success or failure of requests. All error responses include a consistent JSON structure with details about what went wrong.
+
+## Success codes
+
+### 200 OK
+
+The request was successful and the server returned the requested data.
+
+**Example response**:
+
+```json
+{
+  "slug": "titanic",
+  "title": "Titanic - Machine Learning from Disaster",
+  "status": "completed",
+  "description": "Start here! Predict survival on the Titanic...",
+  "metadata": {
+    "title": "Titanic - Machine Learning from Disaster",
+    "category": "Getting Started",
+    "prize": "Knowledge",
+    "team_count": 15000
+  },
+  "toon_content": "# Competition: Titanic...\n",
+  "cached_at": "2026-03-03T10:15:30Z"
+}
+```
+
+## Client error codes
+
+### 400 Bad Request
+
+The request was malformed or missing required parameters.
+
+**Common causes**:
+- Invalid competition slug (empty or whitespace)
+- Missing required fields in request body
+- Invalid parameter types or values
+- Malformed JSON in request body
+
+**Example response**:
+
+```json
+{
+  "detail": "Invalid competition slug"
+}
+```
+
+**Example scenarios**:
+
+```bash
+# Empty slug
+GET /api/competitions/
+# Response: 400 - "Invalid competition slug"
+
+# Invalid password length
+POST /api/auth/signup
+{
+  "email": "user@example.com",
+  "password": "short"
+}
+# Response: 400 - "Password must be at least 8 characters"
+```
+
+### 401 Unauthorized
+
+Authentication is required but was not provided or is invalid.
+
+**Common causes**:
+- Missing `X-API-Key` header
+- Empty API key value
+
+**Example response**:
+
+```json
+{
+  "detail": "Missing X-API-Key header. Get your key at https://kaggleingest.com/dashboard"
+}
+```
+
+**How to fix**:
+
+```bash
+# Add the X-API-Key header to your request
+curl -H "X-API-Key: ki_your_api_key_here" \
+  https://api.kaggleingest.com/api/competitions/titanic
+```
+
+### 403 Forbidden
+
+The provided API key is invalid or doesn't have permission to access the resource.
+
+**Common causes**:
+- Invalid or expired API key
+- API key from different environment (dev vs prod)
+- Revoked API key
+
+**Example response**:
+
+```json
+{
+  "detail": "Invalid API key"
+}
+```
+
+**How to fix**:
+
+1. Verify your API key is correct
+2. Generate a new API key from your dashboard
+3. Check that you're using the correct environment
+
+### 404 Not Found
+
+The requested resource doesn't exist.
+
+**Common causes**:
+- Competition slug doesn't exist on Kaggle
+- Typo in competition slug
+- Endpoint URL is incorrect
+
+**Example response**:
+
+```json
+{
+  "detail": "Not Found"
+}
+```
+
+### 409 Conflict
+
+The request conflicts with the current state of the server.
+
+**Common causes**:
+- Email already registered during signup
+- Duplicate resource creation
+
+**Example response**:
+
+```json
+{
+  "detail": "Email already registered"
+}
+```
+
+**How to fix**:
+
+For duplicate email during signup, use the login endpoint instead or use a different email address.
+
+### 429 Too Many Requests
+
+You've exceeded the rate limit for the endpoint.
+
+**Example response**:
+
+```json
+{
+  "error": "Rate limit exceeded: 20 per 1 minute"
+}
+```
+
+**Response headers**:
+
+```
+X-RateLimit-Limit: 20
+X-RateLimit-Remaining: 0
+X-RateLimit-Reset: 1709500920
+Retry-After: 45
+```
+
+**How to fix**:
+
+See the [rate limits](/api-reference/rate-limits) page for detailed retry strategies and best practices.
+
+## Server error codes
+
+### 500 Internal Server Error
+
+The server encountered an unexpected error while processing your request.
+
+**Common causes**:
+- Database connection failures
+- Unhandled exceptions in application code
+- Kaggle API errors
+- Background task failures
+
+**Example response**:
+
+```json
+{
+  "detail": "Search failed"
+}
+```
+
+**What to do**:
+
+1. **Check your request**: Ensure all parameters are valid
+2. **Retry with backoff**: The error may be transient
+3. **Check status page**: Visit status.kaggleingest.com for service status
+4. **Contact support**: If the issue persists, reach out with the request details
+
+**Retry example**:
+
+```python
+import time
+import requests
+
+def request_with_retry(url, max_retries=3):
+    for attempt in range(max_retries):
+        try:
+            response = requests.get(url)
+            
+            if response.status_code == 500:
+                if attempt < max_retries - 1:
+                    wait_time = 2 ** attempt  # Exponential backoff
+                    print(f"Server error, retrying in {wait_time}s...")
+                    time.sleep(wait_time)
+                    continue
+            
+            response.raise_for_status()
+            return response.json()
+            
+        except requests.exceptions.RequestException as e:
+            if attempt == max_retries - 1:
+                raise
+            time.sleep(2 ** attempt)
+    
+    raise Exception("Max retries exceeded")
+```
+
+## Error response structure
+
+All error responses follow a consistent structure:
+
+```json
+{
+  "detail": "Error message describing what went wrong"
+}
+```
+
+For some errors, additional context may be included:
+
+```json
+{
+  "detail": "Signup failed: Connection timeout",
+  "error_code": "DATABASE_ERROR",
+  "timestamp": "2026-03-03T10:15:30Z"
+}
+```
+
+## Response headers
+
+Every API response includes these headers:
+
+### X-Process-Time-Ms
+
+Server-side processing time in milliseconds:
+
+```
+X-Process-Time-Ms: 142
+```
+
+Use this to:
+- Monitor API performance
+- Identify slow endpoints
+- Optimize request patterns
+- Debug timeout issues
+
+### Rate limit headers
+
+Included with rate-limited endpoints (see [rate limits](/api-reference/rate-limits)):
+
+```
+X-RateLimit-Limit: 20
+X-RateLimit-Remaining: 15
+X-RateLimit-Reset: 1709500920
+```
+
+### Standard headers
+
+```
+Content-Type: application/json
+Content-Encoding: gzip
+Access-Control-Allow-Origin: *
+```
+
+## Status-specific error messages
+
+### Competition processing states
+
+When fetching competition metadata, you may receive these status values:
+
+#### Processing status
+
+```json
+{
+  "slug": "titanic",
+  "title": "Processing...",
+  "status": "processing",
+  "message": "Competition data is being fetched. Check back in 30 seconds."
+}
+```
+
+**What it means**: The competition data is currently being fetched from Kaggle in the background.
+
+**What to do**: Poll the endpoint again after 30-60 seconds.
+
+#### Failed status
+
+```json
+{
+  "slug": "invalid-comp",
+  "title": "Retrying...",
+  "status": "processing",
+  "message": "Retrying competition data fetch. Check back in 30-60 seconds."
+}
+```
+
+**What it means**: The previous fetch attempt failed and the system is retrying.
+
+**What to do**: Wait 30-60 seconds before polling again.
+
+#### Expired cache
+
+```json
+{
+  "slug": "titanic",
+  "title": "Updating cache...",
+  "status": "processing",
+  "message": "Cached data is older than 30 days. Refreshing from Kaggle..."
+}
+```
+
+**What it means**: The cached data is outdated and being refreshed.
+
+**What to do**: You'll receive fresh data on the next request in 30-60 seconds.
+
+## Best practices
+
+### Handle errors gracefully
+
+```python
+import requests
+
+def get_competition(slug):
+    try:
+        response = requests.get(
+            f"https://api.kaggleingest.com/api/competitions/{slug}",
+            headers={"X-API-Key": "ki_your_key"}
+        )
+        response.raise_for_status()
+        return response.json()
+        
+    except requests.exceptions.HTTPError as e:
+        if e.response.status_code == 401:
+            print("Authentication failed. Check your API key.")
+        elif e.response.status_code == 404:
+            print(f"Competition '{slug}' not found.")
+        elif e.response.status_code == 429:
+            print("Rate limit exceeded. Waiting before retry...")
+        elif e.response.status_code == 500:
+            print("Server error. Retrying...")
+        else:
+            print(f"Error: {e.response.json().get('detail')}")
+        return None
+        
+    except requests.exceptions.RequestException as e:
+        print(f"Network error: {e}")
+        return None
+```
+
+### Log response details
+
+When debugging, capture these details:
+
+```python
+response = requests.get(url, headers=headers)
+
+print(f"Status: {response.status_code}")
+print(f"Process time: {response.headers.get('X-Process-Time-Ms')}ms")
+print(f"Rate limit remaining: {response.headers.get('X-RateLimit-Remaining')}")
+print(f"Response: {response.json()}")
+```
+
+### Set appropriate timeouts
+
+```python
+# Set connection and read timeouts
+response = requests.get(
+    url,
+    headers=headers,
+    timeout=(5, 30)  # 5s connection, 30s read
+)
+```
+
+## Getting help
+
+If you encounter persistent errors:
+
+1. **Check the documentation**: Verify your request format matches the examples
+2. **Review error details**: The `detail` field often contains actionable information
+3. **Check status page**: Visit status.kaggleingest.com
+4. **Contact support**: Email support@kaggleingest.com with:
+   - Request URL and method
+   - Request headers (excluding API key)
+   - Response status code and body
+   - Timestamp of the error
+   - Your use case
